@@ -39,6 +39,17 @@ namespace httpd {
 using namespace std;
 
 routes::routes() : _general_handler([this](std::exception_ptr eptr) mutable {
+    try {
+        std::rethrow_exception(eptr);
+    } catch (const redirect_exception& _e) {
+        auto rep = std::make_unique<http::reply>();
+        rep->add_header("Location", _e.url).set_status(_e.status()).done(
+                "json");
+        return rep;
+    } catch (...) {
+        // Fall through to return exception reply
+    }
+
     return exception_reply(eptr);
 }) {}
 
