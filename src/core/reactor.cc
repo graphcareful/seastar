@@ -3931,6 +3931,18 @@ smp_options::smp_options(program_options::option_group* parent_group)
 {
 }
 
+thread_local metrics::impl::metric_implementations metric_impls;
+
+metrics::impl::metric_implementations& metrics::impl::get_metric_implementations() {
+    return metric_impls;
+}
+
+thread_local scollectd::impl scollectd_impl;
+
+scollectd::impl & scollectd::get_impl() {
+    return scollectd_impl;
+}
+
 struct reactor_deleter {
     void operator()(reactor* p) {
         p->~reactor();
