@@ -540,29 +540,11 @@ future<metric_relabeling_result> set_relabel_configs(const std::vector<relabel_c
  */
 const std::vector<relabel_config>& get_relabel_configs();
 
-/*
- * \brief change the metrics family config
- *
- * Family config is a configuration that relates to all metrics with the same name but with different labels.
- * set_metric_family_configs allows changing that configuration during run time.
- * Specifically, change the label aggregation based on a metric name.
- *
- * The following is an example for setting the aggregate labels for the metric test_gauge_1
- * and all metrics matching the regex test_gauge1.*:
- *
- * std::vector<sm::metric_family_config> fc(2);
- * fc[0].name = "test_gauge_1";
- * fc[0].aggregate_labels = { "lb" };
- * fc[1].regex_name = "test_gauge1.*";
- * fc[1].aggregate_labels = { "ll", "aa" };
- * sm::set_metric_family_configs(fc);
+/*!
+ * \brief replicate metric families accross internal metrics implementations
  */
-void set_metric_family_configs(const std::vector<metric_family_config>& metrics_config);
+future<>
+replicate_metric_families(int source_handle, std::unordered_multimap<seastar::sstring, int> metric_families_to_replicate);
 
-/*
- * \brief return the current metric_family_config
- * This function returns a vector of the current metrics family config
- */
-const std::vector<metric_family_config>& get_metric_family_configs();
 }
 }
