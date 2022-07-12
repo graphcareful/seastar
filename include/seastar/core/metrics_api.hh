@@ -530,5 +530,11 @@ future<metric_relabeling_result> set_relabel_configs(const std::vector<relabel_c
  */
 const std::vector<relabel_config>& get_relabel_configs();
 
+/*!
+ * \brief replicate metric families accross internal metrics implementations
+ */
+future<>
+replicate_metric_families(int source_handle, std::unordered_multimap<seastar::sstring, int> metric_families_to_replicate);
+
 }
 }
