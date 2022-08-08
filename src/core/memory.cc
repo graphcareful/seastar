@@ -437,7 +437,7 @@ class small_pool {
     free_object* _free = nullptr;
     unsigned _object_size;
     span_sizes _span_sizes;
-    unsigned _free_count = 0;
+    size_t _free_count = 0;
     unsigned _min_free;
     unsigned _max_free;
     unsigned _pages_in_use = 0;
@@ -557,8 +557,6 @@ struct cpu_pages {
     std::vector<reclaimer*> reclaimers;
     static constexpr unsigned nr_span_lists = 32;
     page_list free_spans[nr_span_lists];  // contains aligned spans with span_size == 2^idx
-    small_pool_array<false> small_pools;
-    small_pool_array<true> sampled_small_pools;
     alignas(seastar::cache_line_size) std::atomic<cross_cpu_free_item*> xcpu_freelist;
     static std::atomic<unsigned> cpu_id_gen;
     static cpu_pages* all_cpus[max_cpus];
@@ -571,6 +569,7 @@ struct cpu_pages {
     } asu;
     allocation_site_ptr alloc_site_list_head = nullptr; // For easy traversal of asu.alloc_sites from scylla-gdb.py
     sampler heap_prof_sampler;
+    small_pool_array<true> sampled_small_pools;
 
     char* mem() { return memory; }
 
@@ -886,6 +885,7 @@ cpu_pages::should_sample(size_t size) {
     return heap_prof_sampler.should_sample(size);
 }
 
+[[gnu::always_inline]]
 void
 inline
 cpu_pages::check_large_allocation(size_t size) {
@@ -894,7 +894,8 @@ cpu_pages::check_large_allocation(size_t size) {
     }
 }
 
-void*
+[[gnu::always_inline]]
+inline void*
 cpu_pages::allocate_large(unsigned n_pages, bool should_sample) {
     check_large_allocation(n_pages * page_size);
     return allocate_large_and_trim(n_pages, should_sample);
@@ -1497,7 +1498,8 @@ abort_on_underflow(size_t size) {
     }
 }
 
-void* allocate_large(size_t size, bool should_sample) {
+[[gnu::always_inline]]
+inline void* allocate_large(size_t size, bool should_sample) {
     abort_on_underflow(size);
     unsigned size_in_pages = (size + page_size - 1) >> page_bits;
     if ((size_t(size_in_pages) << page_bits) < size) {
@@ -1558,7 +1560,7 @@ void* allocate_from_sampled_small_pool(size_t size) {
     }
     auto idx = small_pool::size_to_idx(size);
     auto& pool = get_cpu_mem().sampled_small_pools[idx];
-    assert(size <= pool.object_size());
+    dassert(size <= pool.object_size());
     void* ptr = pool.allocate();
     auto alloc_site = get_cpu_mem().add_alloc_site(pool.object_size());
     new (&pool.alloc_site_holder(ptr)) allocation_site_ptr{alloc_site};
@@ -1576,11 +1578,28 @@ void* allocate_from_small_pool(size_t size)
     }
     auto idx = small_pool::size_to_idx(size);
     auto& pool = get_cpu_mem().small_pools[idx];
-    assert(size <= pool.object_size());
+    dassert(size <= pool.object_size());
     return pool.allocate();
 }
 
-void* allocate(size_t size) {
+/**
+ * Common handling code when a pointer (possibly null) has
+ * been returned by any allocation path.
+ */
+[[gnu::always_inline]]
+static inline void* finish_allocation(void* ptr, size_t size) {
+    if (!ptr) {
+        on_allocation_failure(size);
+    } else {
+#ifdef SEASTAR_DEBUG_ALLOCATIONS
+    std::memset(ptr, debug_allocation_pattern, size);
+#endif
+    }
+    alloc_stats::increment_local(alloc_stats::types::allocs);
+    return ptr;
+}
+
+void *allocate_slowpath(size_t size, bool should_sample) {
     if (!is_reactor_thread) {
         if (original_malloc_func) {
             alloc_stats::increment(alloc_stats::types::foreign_mallocs);
@@ -1599,12 +1618,6 @@ void* allocate(size_t size) {
         auto alloc_site = get_cpu_mem().add_alloc_site(pool.object_size());
         new (&pool.alloc_site_holder(ptr)) allocation_site_ptr{alloc_site};
     }
-
-#ifdef SEASTAR_HEAPPROF
-    bool should_sample = get_cpu_mem().should_sample(size);
-#else
-    bool should_sample = get_cpu_mem().should_sample(size);
-#endif
     void* ptr;
     if (size <= max_small_allocation) {
 #ifdef SEASTAR_HEAPPROF
@@ -1618,27 +1631,23 @@ void* allocate(size_t size) {
     } else {
         ptr = allocate_large(size, should_sample);
     }
-    auto idx = small_pool::size_to_idx(size);
-    auto& pool = get_cpu_mem().small_pools[idx];
-    dassert(size <= pool.object_size());
-    return pool.allocate();
+    return finish_allocation(ptr, size);
 }
 
-/**
- * Common handling code when a pointer (possibly null) has
- * been returned by any allocation path.
- */
 [[gnu::always_inline]]
-static inline void* finish_allocation(void* ptr, size_t size) {
-    alloc_stats::increment_local(alloc_stats::types::allocs);
-    if (__builtin_expect(!ptr, false)) {
-        on_allocation_failure(size);
-    } else {
-#ifdef SEASTAR_DEBUG_ALLOCATIONS
-        std::memset(ptr, debug_allocation_pattern, size);
-#endif
+inline void* allocate(size_t size) {
+#ifdef SEASTAR_HEAPPROF
+    bool should_sample = is_reactor_thread ? get_cpu_mem().should_sample(size) : false;
+#else
+    bool should_sample = false;
+#endif // SEASTAR_HEAPPROF
+    if (__builtin_expect(!should_sample && is_reactor_thread && size <= max_small_allocation, true)) {
+        size = std::max(size, sizeof(free_object));
+        auto ptr = allocate_from_small_pool<alignment_t::unaligned>(size);
+        return finish_allocation(ptr, size);
     }
-    return ptr;
+
+    return allocate_slowpath(size, should_sample);
 }
 
 void *allocate_slowpath(size_t size) {
