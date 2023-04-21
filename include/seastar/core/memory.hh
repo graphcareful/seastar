@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <seastar/util/backtrace.hh>
 #include <seastar/core/resource.hh>
 #include <seastar/core/bitops.hh>
 #include <seastar/util/modules.hh>
@@ -404,19 +405,47 @@ public:
     void operator=(scoped_large_allocation_warning_disable&&) = delete;
 };
 
-/// Enable/disable heap profiling.
+/// Describes an allocation location in the code.  The location is identified by
+/// its backtrace. One allocation_site can represent many allocations at the
+/// same location. `count` and `size` represent the cumulative sum of all
+/// allocations at the location.
+struct allocation_site {
+    mutable size_t count = 0; // number of live objects allocated at backtrace.
+    mutable size_t size = 0; // amount of bytes in live objects allocated at backtrace.
+    mutable const allocation_site* next = nullptr; // TODO: remove
+    simple_backtrace backtrace; // call site for this allocation
+
+    bool operator==(const allocation_site& o) const {
+        return backtrace == o.backtrace;
+    }
+
+    bool operator!=(const allocation_site& o) const {
+        return !(*this == o);
+    }
+};
+
+/// If memory profiling is on returns the current memory live set
+std::vector<allocation_site> memory_profile();
+
+/// Copies the current set of allocation_sites in the output parameter
+/// (up to size of output vector) Returns amount of copied elements. Useful if
+/// one wants to avoid allocating an output vector (e.g.: under OOM conditions)
+size_t memory_profile(std::vector<allocation_site>&);
+
+/// Enable heap profiling
 ///
 /// In order to use heap profiling you have to define
 /// `SEASTAR_HEAPPROF`.
-/// Heap profiling data is not currently exposed via an API for
-/// inspection, instead it was designed to be inspected from a
-/// debugger.
+///
 /// For an example script that makes use of the heap profiling data
 /// see [scylla-gdb.py] (https://github.com/scylladb/scylla/blob/e1b22b6a4c56b4f1d0adf65d1a11db4bcb51fe7d/scylla-gdb.py#L1439)
 /// This script can generate either textual representation of the data,
 /// or a zoomable flame graph ([flame graph generation instructions](https://github.com/scylladb/scylla/wiki/Seastar-heap-profiler),
 /// [example flame graph](https://user-images.githubusercontent.com/1389273/72920437-f0cf8a80-3d51-11ea-92f0-f3dbeb698871.png)).
 void set_heap_profiling_enabled(bool);
+
+/// Checks whether heap profiling is currently enabled
+bool get_heap_profiling_enabled();
 
 /// Enable heap profiling for the duration of the scope.
 ///
@@ -431,4 +460,19 @@ public:
 SEASTAR_MODULE_EXPORT_END
 
 }
+}
+
+namespace std {
+
+SEASTAR_MODULE_EXPORT_BEGIN
+
+template<>
+struct hash<seastar::memory::allocation_site> {
+    size_t operator()(const seastar::memory::allocation_site& bi) const {
+        return std::hash<seastar::simple_backtrace>()(bi.backtrace);
+    }
+};
+
+SEASTAR_MODULE_EXPORT_END
+
 }
