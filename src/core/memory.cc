@@ -125,6 +125,7 @@ module seastar;
 #include <seastar/core/posix.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/util/sampler.hh>
 #endif
 #endif
 
@@ -570,7 +571,6 @@ struct cpu_pages {
     } asu;
     allocation_site_ptr alloc_site_list_head = nullptr; // For easy traversal of asu.alloc_sites from scylla-gdb.py
     sampler heap_prof_sampler;
-    small_pool_array<true> sampled_small_pools;
 
     char* mem() { return memory; }
 
@@ -619,6 +619,7 @@ struct cpu_pages {
     void warn_large_allocation(size_t size);
     allocation_site_ptr add_alloc_site(size_t allocated_size);
     void remove_alloc_site(allocation_site_ptr alloc_site, size_t deallocated_size);
+    bool should_sample(size_t size);
     memory::memory_layout memory_layout();
     ~cpu_pages();
 };
@@ -652,10 +653,6 @@ size_t get_heap_profiling_sample_rate() {
     return get_cpu_mem().heap_prof_sampler.sampling_interval();
 }
 
-bool get_heap_profiling_enabled() {
-    return get_cpu_mem().collect_backtrace;
-}
-
 static thread_local int64_t scoped_heap_profiling_embed_count = 0;
 
 scoped_heap_profiling::scoped_heap_profiling(size_t sample_rate) noexcept {
@@ -676,13 +673,13 @@ void set_heap_profiling_sampling_rate(size_t enable) {
             " compile with the Seastar_HEAP_PROFILING=ON CMake option to add heap profiling support");
 }
 
-bool get_heap_profiling_enabled() {
+size_t get_heap_profiling_sample_rate() {
     // don't log here, called on all paths
-    return false;
+    return 0;
 }
 
-scoped_heap_profiling::scoped_heap_profiling() noexcept {
-    set_heap_profiling_enabled(true); // let it print the warning
+scoped_heap_profiling::scoped_heap_profiling(size_t sample_rate) noexcept {
+    set_heap_profiling_sampling_rate(sample_rate); // let it print the warning
 }
 
 scoped_heap_profiling::~scoped_heap_profiling() {
@@ -828,7 +825,7 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, bool should_sample) {
     span->span_size = span_end->span_size = span_size;
     span->pool = nullptr;
 #ifdef SEASTAR_HEAPPROF
-    if (get_heap_profiling_enabled())
+    if (should_sample)
     {
         auto alloc_site = add_alloc_site(span->span_size * page_size);
         span->alloc_site = alloc_site;
@@ -853,7 +850,7 @@ cpu_pages::add_alloc_site(size_t allocated_size) {
     allocation_site_ptr alloc_site = get_allocation_site();
     if (alloc_site) {
         ++alloc_site->count;
-        alloc_site->size += std::max(sampler.sampling_interval(), allocated_size);
+        alloc_site->size += heap_prof_sampler.sample_size(allocated_size);
     }
 
     return alloc_site;
@@ -863,7 +860,7 @@ void
 cpu_pages::remove_alloc_site(allocation_site_ptr alloc_site, size_t deallocated_size) {
     if (alloc_site) {
         --alloc_site->count;
-        alloc_site->size -= std::max(sampler.sampling_interval(), deallocated_size);
+        alloc_site->size -= heap_prof_sampler.sample_size(deallocated_size);
         if (alloc_site->count == 0)
         {
             if (alloc_site->prev)
@@ -884,6 +881,11 @@ cpu_pages::remove_alloc_site(allocation_site_ptr alloc_site, size_t deallocated_
     }
 }
 
+bool
+cpu_pages::should_sample(size_t size) {
+    return heap_prof_sampler.should_sample(size);
+}
+
 void
 inline
 cpu_pages::check_large_allocation(size_t size) {
@@ -892,8 +894,7 @@ cpu_pages::check_large_allocation(size_t size) {
     }
 }
 
-[[gnu::always_inline]]
-inline void*
+void*
 cpu_pages::allocate_large(unsigned n_pages, bool should_sample) {
     check_large_allocation(n_pages * page_size);
     return allocate_large_and_trim(n_pages, should_sample);
@@ -1496,8 +1497,7 @@ abort_on_underflow(size_t size) {
     }
 }
 
-[[gnu::always_inline]]
-inline void* allocate_large(size_t size, bool should_sample) {
+void* allocate_large(size_t size, bool should_sample) {
     abort_on_underflow(size);
     unsigned size_in_pages = (size + page_size - 1) >> page_bits;
     if ((size_t(size_in_pages) << page_bits) < size) {
@@ -1599,10 +1599,16 @@ void* allocate(size_t size) {
         auto alloc_site = get_cpu_mem().add_alloc_site(pool.object_size());
         new (&pool.alloc_site_holder(ptr)) allocation_site_ptr{alloc_site};
     }
+
+#ifdef SEASTAR_HEAPPROF
+    bool should_sample = get_cpu_mem().should_sample(size);
+#else
+    bool should_sample = get_cpu_mem().should_sample(size);
+#endif
     void* ptr;
     if (size <= max_small_allocation) {
 #ifdef SEASTAR_HEAPPROF
-        if (get_heap_profiling_enabled()) {
+        if (should_sample) {
             ptr = allocate_from_sampled_small_pool<alignment_t::unaligned>(size);
         } else
 #endif
@@ -1610,7 +1616,7 @@ void* allocate(size_t size) {
             ptr = allocate_from_small_pool<alignment_t::unaligned>(size);
         }
     } else {
-        ptr = allocate_large(size);
+        ptr = allocate_large(size, should_sample);
     }
     auto idx = small_pool::size_to_idx(size);
     auto& pool = get_cpu_mem().small_pools[idx];
@@ -1719,8 +1725,7 @@ void* allocate_aligned(size_t align, size_t size) {
         size = std::max(sizeof(free_object), align);
     }
 #ifdef SEASTAR_HEAPPROF
-    auto& mem = get_cpu_mem();
-    bool should_sample = mem.maybe_sample(size) && mem.definitely_sample(size);
+    bool should_sample = get_cpu_mem().should_sample(size);
 #else
     bool should_sample = false;
 #endif
@@ -1729,7 +1734,7 @@ void* allocate_aligned(size_t align, size_t size) {
         // Our small allocator only guarantees alignment for power-of-two
         // allocations which are not larger than a page.
 #ifdef SEASTAR_HEAPPROF
-        if (get_heap_profiling_enabled()) {
+        if (should_sample) {
             ptr = allocate_from_sampled_small_pool<alignment_t::aligned>(size);
         } else
 #endif
@@ -2182,13 +2187,13 @@ static bool try_trigger_error_injector() {
     }
 }
 
-std::vector<allocation_site> memory_profile() {
+std::vector<allocation_site> sampled_memory_profile() {
     disable_backtrace_temporarily dbt;
     std::vector<allocation_site> ret(get_cpu_mem().asu.alloc_sites.begin(), get_cpu_mem().asu.alloc_sites.end());
     return ret;
 }
 
-size_t memory_profile(std::vector<allocation_site>& output) {
+size_t sampled_memory_profile(std::vector<allocation_site>& output) {
     auto to_copy = std::min(output.size(), get_cpu_mem().asu.alloc_sites.size());
     std::copy_n(get_cpu_mem().asu.alloc_sites.begin(), to_copy, output.begin());
     return to_copy;
@@ -2587,20 +2592,20 @@ void set_heap_profiling_sampling_rate(size_t) {
     seastar_logger.warn("Seastar compiled with default allocator, heap profiler not supported");
 }
 
-bool get_heap_profiling_enabled() {
-    return false;
+size_t get_heap_profiling_sample_rate() {
+    return 0;
 }
 
-std::vector<allocation_site> memory_profile() {
+std::vector<allocation_site> sampled_memory_profile() {
     return {};
 }
 
-size_t memory_profile(std::vector<allocation_site>&) { 
-    return 0; 
+size_t sampled_memory_profile(std::vector<allocation_site>&) {
+    return 0;
 }
 
-scoped_heap_profiling::scoped_heap_profiling() noexcept {
-    set_heap_profiling_enabled(true); // let it print the warning
+scoped_heap_profiling::scoped_heap_profiling(size_t sample_rate) noexcept {
+    set_heap_profiling_sampling_rate(sample_rate); // let it print the warning
 }
 
 scoped_heap_profiling::~scoped_heap_profiling() {
