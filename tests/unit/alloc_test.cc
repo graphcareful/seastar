@@ -313,35 +313,117 @@ SEASTAR_TEST_CASE(test_diagnostics_allocation) {
 
 #ifdef SEASTAR_HEAPPROF
 
-SEASTAR_TEST_CASE(test_sampled_profile_collection)
+SEASTAR_TEST_CASE(test_sampled_profile_collection_small)
 {
-    BOOST_REQUIRE(!seastar::memory::get_heap_profiling_enabled());
+    {
+        auto stats = seastar::memory::memory_profile();
+        BOOST_REQUIRE_EQUAL(stats.size(), 0);
+    }
+
+    std::size_t count = 100;
+    std::vector<volatile char*> ptrs(count);
+
     seastar::memory::set_heap_profiling_enabled(true);
-    BOOST_REQUIRE(seastar::memory::get_heap_profiling_enabled());
+
+    #pragma nounroll
+    for (std::size_t i = 0; i < count / 2; ++i)
+    {
+        volatile char* ptr = static_cast<char*>(malloc(10));
+        *ptr = 'c'; // to prevent compiler from considering this a dead allocation and optimizing it out
+        ptrs[i] = ptr;
+    }
+
+    #pragma nounroll
+    for (std::size_t i = count / 2; i < count; ++i)
+    {
+        volatile char* ptr = static_cast<char*>(malloc(10));
+        *ptr = 'c'; // to prevent compiler from considering this a dead allocation and optimizing it out
+        ptrs[i] = ptr;
+    }
+
+    // NB: the test framework allocates
+    seastar::memory::set_heap_profiling_enabled(0);
 
     {
         auto stats = seastar::memory::memory_profile();
-        BOOST_REQUIRE_EQUAL(stats.size(), 0);
+
+        for (const auto& stat : stats)
+        {
+            std::cout << stat.backtrace << std::endl;
+        }
+
+        BOOST_REQUIRE_EQUAL(stats.size(), 2);
+        BOOST_REQUIRE_EQUAL(stats[0].size, stats[0].count * 100);
     }
 
-    volatile char* ptr = static_cast<char*>(malloc(10));
-    *ptr = 'c'; // to prevent compiler from considering this a dead allocation and optimizing it out
-
-    {
-        auto stats = seastar::memory::memory_profile();
-        BOOST_REQUIRE_EQUAL(stats.size(), 1);
-        BOOST_REQUIRE_EQUAL(stats[0].size, 32); // 10 + 8 falls into 32 byte pool
-    }
-
-    free((void*)ptr);
-
-    {
-        auto stats = seastar::memory::memory_profile();
-        BOOST_REQUIRE_EQUAL(stats.size(), 0);
-    }
-
-    // Needed for now because we can't differentiate between sampled allocations and non-sampled ones
     seastar::memory::set_heap_profiling_enabled(false);
+
+    for (auto ptr : ptrs)
+    {
+        free((void*)ptr);
+    }
+
+    seastar::memory::set_heap_profiling_enabled(0);
+
+    {
+        auto stats = seastar::memory::memory_profile();
+        BOOST_REQUIRE_EQUAL(stats.size(), 0);
+    }
+
+    return seastar::make_ready_future();
+}
+
+SEASTAR_TEST_CASE(test_sampled_profile_collection_large)
+{
+    {
+        auto stats = seastar::memory::memory_profile();
+        BOOST_REQUIRE_EQUAL(stats.size(), 0);
+    }
+
+    std::size_t count = 100;
+    std::vector<volatile char*> ptrs(count);
+
+    seastar::memory::set_heap_profiling_enabled(1000000);
+
+    #pragma nounroll
+    for (std::size_t i = 0; i < count / 2; ++i)
+    {
+        volatile char* ptr = static_cast<char*>(malloc(100000));
+        *ptr = 'c'; // to prevent compiler from considering this a dead allocation and optimizing it out
+        ptrs[i] = ptr;
+    }
+
+    #pragma nounroll
+    for (std::size_t i = count / 2; i < count; ++i)
+    {
+        volatile char* ptr = static_cast<char*>(malloc(100000));
+        *ptr = 'c'; // to prevent compiler from considering this a dead allocation and optimizing it out
+        ptrs[i] = ptr;
+    }
+
+    // NB: the test framework allocate
+    seastar::memory::set_heap_profiling_enabled(0);
+
+    {
+        auto stats = seastar::memory::memory_profile();
+        BOOST_REQUIRE_EQUAL(stats.size(), 2);
+        BOOST_REQUIRE_EQUAL(stats[0].size, stats[0].count * 1000000);
+    }
+
+    seastar::memory::set_heap_profiling_enabled(1000000);
+
+    for (auto ptr : ptrs)
+    {
+        free((void*)ptr);
+    }
+
+    seastar::memory::set_heap_profiling_enabled(0);
+
+    {
+        auto stats = seastar::memory::memory_profile();
+        // NOTE this is because right now the tracking structure doesn't delete call sites ever
+        BOOST_REQUIRE_EQUAL(stats.size(), 0);
+    }
 
     return seastar::make_ready_future();
 }
