@@ -316,14 +316,14 @@ SEASTAR_TEST_CASE(test_diagnostics_allocation) {
 SEASTAR_TEST_CASE(test_sampled_profile_collection_small)
 {
     {
-        auto stats = seastar::memory::memory_profile();
+        auto stats = seastar::memory::sampled_memory_profile();
         BOOST_REQUIRE_EQUAL(stats.size(), 0);
     }
 
     std::size_t count = 100;
     std::vector<volatile char*> ptrs(count);
 
-    seastar::memory::set_heap_profiling_enabled(true);
+    seastar::memory::set_heap_profiling_sampling_rate(100);
 
     #pragma nounroll
     for (std::size_t i = 0; i < count / 2; ++i)
@@ -342,31 +342,25 @@ SEASTAR_TEST_CASE(test_sampled_profile_collection_small)
     }
 
     // NB: the test framework allocates
-    seastar::memory::set_heap_profiling_enabled(0);
+    seastar::memory::set_heap_profiling_sampling_rate(0);
 
     {
-        auto stats = seastar::memory::memory_profile();
-
-        for (const auto& stat : stats)
-        {
-            std::cout << stat.backtrace << std::endl;
-        }
-
+        auto stats = seastar::memory::sampled_memory_profile();
         BOOST_REQUIRE_EQUAL(stats.size(), 2);
         BOOST_REQUIRE_EQUAL(stats[0].size, stats[0].count * 100);
     }
 
-    seastar::memory::set_heap_profiling_enabled(false);
+    seastar::memory::set_heap_profiling_sampling_rate(100);
 
     for (auto ptr : ptrs)
     {
         free((void*)ptr);
     }
 
-    seastar::memory::set_heap_profiling_enabled(0);
+    seastar::memory::set_heap_profiling_sampling_rate(0);
 
     {
-        auto stats = seastar::memory::memory_profile();
+        auto stats = seastar::memory::sampled_memory_profile();
         BOOST_REQUIRE_EQUAL(stats.size(), 0);
     }
 
@@ -376,14 +370,14 @@ SEASTAR_TEST_CASE(test_sampled_profile_collection_small)
 SEASTAR_TEST_CASE(test_sampled_profile_collection_large)
 {
     {
-        auto stats = seastar::memory::memory_profile();
+        auto stats = seastar::memory::sampled_memory_profile();
         BOOST_REQUIRE_EQUAL(stats.size(), 0);
     }
 
     std::size_t count = 100;
     std::vector<volatile char*> ptrs(count);
 
-    seastar::memory::set_heap_profiling_enabled(1000000);
+    seastar::memory::set_heap_profiling_sampling_rate(1000000);
 
     #pragma nounroll
     for (std::size_t i = 0; i < count / 2; ++i)
@@ -402,25 +396,25 @@ SEASTAR_TEST_CASE(test_sampled_profile_collection_large)
     }
 
     // NB: the test framework allocate
-    seastar::memory::set_heap_profiling_enabled(0);
+    seastar::memory::set_heap_profiling_sampling_rate(0);
 
     {
-        auto stats = seastar::memory::memory_profile();
+        auto stats = seastar::memory::sampled_memory_profile();
         BOOST_REQUIRE_EQUAL(stats.size(), 2);
         BOOST_REQUIRE_EQUAL(stats[0].size, stats[0].count * 1000000);
     }
 
-    seastar::memory::set_heap_profiling_enabled(1000000);
+    seastar::memory::set_heap_profiling_sampling_rate(1000000);
 
     for (auto ptr : ptrs)
     {
         free((void*)ptr);
     }
 
-    seastar::memory::set_heap_profiling_enabled(0);
+    seastar::memory::set_heap_profiling_sampling_rate(0);
 
     {
-        auto stats = seastar::memory::memory_profile();
+        auto stats = seastar::memory::sampled_memory_profile();
         // NOTE this is because right now the tracking structure doesn't delete call sites ever
         BOOST_REQUIRE_EQUAL(stats.size(), 0);
     }
