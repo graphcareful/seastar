@@ -922,12 +922,12 @@ allocation_site_ptr get_allocation_site() {
     if (!cpu_mem.is_initialized() || !cpu_mem.heap_prof_sampler.sampling_interval()) {
         return nullptr;
     }
-    // TODO: limit size of alloc_sites
     disable_backtrace_temporarily dbt;
     allocation_site new_alloc_site;
     new_alloc_site.backtrace = get_backtrace();
     if (cpu_mem.asu.alloc_sites.size() >= 1000
-        && cpu_mem.asu.alloc_sites.find(new_alloc_site) == cpu_mem.asu.alloc_sites.end()) {
+        && cpu_mem.asu.alloc_sites.find(new_alloc_site) == cpu_mem.asu.alloc_sites.end())
+    {
         // Drop sample for now. Could do something smarter like dropping a
         // current one at random but needs more work in remove_alloc_site as we
         // might then have allocations for which the allocsite is no longer
