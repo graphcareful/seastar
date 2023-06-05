@@ -315,6 +315,7 @@ using allocate_system_memory_fn
 namespace bi = boost::intrusive;
 
 static thread_local uintptr_t local_expected_cpu_id = std::numeric_limits<uintptr_t>::max();
+static thread_local uintptr_t local_expected_cpu_id_unshifted = std::numeric_limits<uintptr_t>::max();
 
 inline
 unsigned object_cpu_id(const void* ptr) {
@@ -437,7 +438,7 @@ class small_pool {
     free_object* _free = nullptr;
     unsigned _object_size;
     span_sizes _span_sizes;
-    size_t _free_count = 0;
+    unsigned _free_count = 0;
     unsigned _min_free;
     unsigned _max_free;
     unsigned _pages_in_use = 0;
@@ -592,8 +593,7 @@ struct cpu_pages {
     void free_span_unaligned(pageidx start, uint32_t nr_pages);
     void free(void* ptr);
     void free(void* ptr, size_t size);
-    static bool try_free_fastpath(void* ptr);
-    static bool is_local_pointer(void* ptr);
+    static bool is_fast_path_free(void* ptr);
     static void do_foreign_free(void* ptr);
     void shrink(void* ptr, size_t new_size);
     static void free_cross_cpu(unsigned cpu_id, void* ptr);
@@ -1062,57 +1062,11 @@ void cpu_pages::free(void* ptr, size_t size) {
 #endif
 }
 
-// Is the passed pointer a local pointer, i.e., allocated on the current shard from the 
-// per-shard allocator.
+// fast path for local free
 [[gnu::always_inline]]
 inline bool
-cpu_pages::is_local_pointer(void* ptr) {
+cpu_pages::is_fast_path_free(void* ptr) {
     return (reinterpret_cast<uintptr_t>(ptr) & cpu_id_and_mem_base_mask) == local_expected_cpu_id;
-}
-
-// Try to execute free on the fast path, which succeeds if:
-//
-// 1) The pointer is local to this shard
-// 2) The pointer is from a small pool
-// 3) The small pool is not sampled
-//
-// In this case, complete the de-allocation and return true.
-// Otherwise, modify nothing and return false.
-[[gnu::always_inline]]
-inline bool
-cpu_pages::try_free_fastpath(void* ptr) {
-    if (__builtin_expect(is_local_pointer(ptr), true)) {
-        auto pool = get_cpu_mem().to_page(ptr)->pool;
-        if (__builtin_expect(pool && !pool->is_sampled_pool(), true)) {
-            alloc_stats::increment_local(alloc_stats::types::frees);
-            pool->deallocate(ptr);
-            return true;
-        }
-    }
-    return false;
-}
-
-/// Helper to allow a single implementation for sized and non-sized functions.
-/// Indicator to allow a single implementation for sized and non-sized functions.
-/// The size parameter will be either no_size tag type or size_t, and most
-/// of the implementation can be shared, using constexpr if or other dispatch
-/// in the places where there should be a difference of behavior.
-struct no_size {};
-
-template <typename S>
-requires std::same_as<S, size_t> || std::same_as<S, no_size>
-[[gnu::noinline]]
-static void free_slowpath(void* obj, S size) {
-    if (cpu_pages::is_local_pointer(obj)) {
-        alloc_stats::increment_local(alloc_stats::types::frees);
-        if constexpr (std::is_same_v<decltype(size), no_size>) {
-            get_cpu_mem().free(obj);
-        } else {
-            get_cpu_mem().free(obj, size);
-        }
-    } else {
-        cpu_pages::do_foreign_free(obj);
-    }
 }
 
 [[gnu::noinline]]
@@ -1184,6 +1138,7 @@ bool cpu_pages::initialize() {
     cpu_id = cpu_id_gen.fetch_add(1, std::memory_order_relaxed);
     local_expected_cpu_id = (static_cast<uint64_t>(cpu_id) << cpu_id_shift)
 	        | reinterpret_cast<uintptr_t>(mem_base());
+    local_expected_cpu_id_unshifted = local_expected_cpu_id >> cpu_id_shift;
     assert(cpu_id < max_cpus);
     all_cpus[cpu_id] = this;
     auto base = mem_base() + (size_t(cpu_id) << cpu_id_shift);
@@ -1764,19 +1719,23 @@ void* allocate_aligned(size_t align, size_t size) {
     return ptr;
 }
 
-
-/// Similarly to memory::allocate() we expect to inline the whole fast path
-/// of free into all the variations of the top level dallocation functions like
-/// free, delete, sized delete, etc. The slow path is not inline and is shared
-/// by all implementations.
-///
-/// The S template object allows us to handle both sized and unsized allocations
-/// in the same code path.
-template <typename S = no_size>
 [[gnu::always_inline]]
-inline void free(void* obj, S size = {}) {
-    if (!__builtin_expect(cpu_pages::try_free_fastpath(obj), true)) {
-        free_slowpath(obj, size);
+inline void free(void* obj) {
+    if (cpu_pages::is_fast_path_free(obj)) {
+        alloc_stats::increment_local(alloc_stats::types::frees);
+        get_cpu_mem().free(obj);
+    } else {
+        cpu_pages::do_foreign_free(obj);
+    }
+}
+
+[[gnu::always_inline]]
+inline void free(void* obj, size_t size) {
+    if (cpu_pages::is_fast_path_free(obj)) {
+        alloc_stats::increment_local(alloc_stats::types::frees);
+        get_cpu_mem().free(obj, size);
+    } else {
+        cpu_pages::do_foreign_free(obj);
     }
 }
 
