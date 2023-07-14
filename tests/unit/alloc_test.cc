@@ -19,6 +19,8 @@
  * Copyright (C) 2015 Cloudius Systems, Ltd.
  */
 
+#include <seastar/testing/perf_tests.hh>
+#include <seastar/testing/test_case.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/temporary_buffer.hh>
