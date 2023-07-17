@@ -337,7 +337,7 @@ public:
 
 using value_map = std::map<sstring, metric_family>;
 
-using metric_metadata_vector = std::vector<metric_info>;
+using metric_metadata_fifo = std::deque<metric_info>;
 
 /*!
  * \brief holds a metric family metadata
@@ -355,7 +355,7 @@ using metric_metadata_vector = std::vector<metric_info>;
  */
 struct metric_family_metadata {
     metric_family_info mf;
-    metric_metadata_vector metrics;
+    metric_metadata_fifo metrics;
 };
 
 using value_vector = std::deque<metric_value>;
