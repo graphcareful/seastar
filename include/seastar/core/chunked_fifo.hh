@@ -147,8 +147,9 @@ private:
         size_t _item_index = 0;
 
     protected:
-        inline explicit basic_iterator(chunk_t* c) noexcept;
-        inline basic_iterator(chunk_t* c, size_t item_index) noexcept;
+        inline basic_iterator() noexcept;
+        inline explicit basic_iterator(chunk* c) noexcept;
+        inline basic_iterator(chunk* c, size_t item_index) noexcept;
 
     public:
         basic_iterator() noexcept = default;
@@ -213,7 +214,13 @@ private:
 template <typename T, size_t items_per_chunk>
 template <bool IsConst>
 inline
-chunked_fifo<T, items_per_chunk>::basic_iterator<IsConst>::basic_iterator(chunk_t* c) noexcept : _chunk(c), _item_index(_chunk ? _chunk->begin : 0) {
+chunked_fifo<T, items_per_chunk>::basic_iterator<U>::basic_iterator() noexcept : basic_iterator(nullptr, 0) {
+}
+
+template <typename T, size_t items_per_chunk>
+template <typename U>
+inline
+chunked_fifo<T, items_per_chunk>::basic_iterator<U>::basic_iterator(chunk* c) noexcept : _chunk(c), _item_index(_chunk ? _chunk->begin : 0) {
 }
 
 template <typename T, size_t items_per_chunk>
