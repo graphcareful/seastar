@@ -439,8 +439,6 @@ foreign_ptr<values_reference> get_values(int handle) {
     auto impl = get_local_impl(handle);
     res.metadata = impl->metadata();
     auto & functions = impl->functions();
-
-    mv.reserve(functions.size());
     for (auto&& i : functions) {
         value_vector values;
         for (auto&& v : i) {
