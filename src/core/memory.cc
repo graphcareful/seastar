@@ -125,6 +125,7 @@ module seastar;
 #include <seastar/core/posix.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/util/sampler.hh>
 #endif
 #endif
 
@@ -207,6 +208,7 @@ merge(numa_layout one, numa_layout two) {
 }
 
 #ifndef SEASTAR_DEFAULT_ALLOCATOR
+
 
 #if FMT_VERSION >= 90000
 namespace seastar::memory {
@@ -313,6 +315,7 @@ using allocate_system_memory_fn
 namespace bi = boost::intrusive;
 
 static thread_local uintptr_t local_expected_cpu_id = std::numeric_limits<uintptr_t>::max();
+static thread_local uintptr_t local_expected_cpu_id_unshifted = std::numeric_limits<uintptr_t>::max();
 
 inline
 unsigned object_cpu_id(const void* ptr) {
@@ -443,9 +446,7 @@ class small_pool {
     // When freeing small allocations this flag is checked to see whether an
     // allocation site pointer is part of the object and the allocation needs
     // removal from the allocation_site tracking
-#ifdef SEASTAR_HEAPPROF
     bool _sampled_pool = false;
-#endif
     page_list _span_list;
     static constexpr unsigned idx_frac_bits = 2;
 public:
@@ -455,13 +456,7 @@ public:
     void deallocate(void* object);
     unsigned object_size() const { return _object_size; }
     /// See _sampled_pool
-    bool is_sampled_pool() const {
-#ifdef SEASTAR_HEAPPROF
-        return _sampled_pool;
-#else
-        return false;
-#endif
-    }
+    bool is_sampled_pool() const { return _sampled_pool; }
     bool objects_page_aligned() const { return is_page_aligned(_object_size); }
     static constexpr unsigned size_to_idx(unsigned size);
     static constexpr unsigned idx_to_size(unsigned idx);
@@ -831,7 +826,8 @@ cpu_pages::allocate_large_and_trim(unsigned n_pages, bool should_sample) {
     span->span_size = span_end->span_size = span_size;
     span->pool = nullptr;
 #ifdef SEASTAR_HEAPPROF
-    if (should_sample) {
+    if (should_sample)
+    {
         auto alloc_site = add_alloc_site(span->span_size * page_size);
         span->alloc_site = alloc_site;
     }
@@ -861,21 +857,23 @@ cpu_pages::add_alloc_site(size_t allocated_size) {
     return alloc_site;
 }
 
-void
+void 
 cpu_pages::remove_alloc_site(allocation_site_ptr alloc_site, size_t deallocated_size) {
     if (alloc_site) {
         --alloc_site->count;
-        auto sample_size = heap_prof_sampler.sample_size(deallocated_size);
-        // prevent underflow in case sample rate changed
-        alloc_site->size -= alloc_site->size < sample_size ? alloc_site->size : sample_size;
-        if (alloc_site->count == 0) {
-            if (alloc_site->prev) {
+        alloc_site->size -= heap_prof_sampler.sample_size(deallocated_size);
+        if (alloc_site->count == 0)
+        {
+            if (alloc_site->prev)
+            {
                 alloc_site->prev->next = alloc_site->next;
             }
-            if (alloc_site->next) {
+            if (alloc_site->next)
+            {
                 alloc_site->next->prev = alloc_site->prev;
             }
-            if (alloc_site_list_head == alloc_site) {
+            if (alloc_site_list_head == alloc_site)
+            {
                 alloc_site_list_head = alloc_site->next;
             }
 
@@ -946,7 +944,8 @@ allocation_site_ptr get_allocation_site() {
     allocation_site new_alloc_site;
     new_alloc_site.backtrace = get_backtrace();
     if (cpu_mem.asu.alloc_sites.size() >= 1000
-        && cpu_mem.asu.alloc_sites.find(new_alloc_site) == cpu_mem.asu.alloc_sites.end()) {
+        && cpu_mem.asu.alloc_sites.find(new_alloc_site) == cpu_mem.asu.alloc_sites.end())
+    {
         // Drop sample for now. Could do something smarter like dropping a
         // current one at random but needs more work in remove_alloc_site as we
         // might then have allocations for which the allocsite is no longer
@@ -957,7 +956,8 @@ allocation_site_ptr get_allocation_site() {
     allocation_site_ptr alloc_site = &*insert_result.first;
     if (insert_result.second) {
         alloc_site->next = cpu_mem.alloc_site_list_head;
-        if (cpu_mem.alloc_site_list_head) {
+        if (cpu_mem.alloc_site_list_head)
+        {
             cpu_mem.alloc_site_list_head->prev = alloc_site;
         }
         cpu_mem.alloc_site_list_head = alloc_site;
@@ -978,27 +978,12 @@ small_pool::alloc_site_holder(void* ptr) {
 
 #endif
 
-static
-void
-maybe_enable_transparent_hugepages(void* addr, size_t len) {
-    if (use_transparent_hugepages.load(std::memory_order_relaxed)) {
-        ::madvise(addr, len, MADV_HUGEPAGE);
-    }
-}
-
-static
-void
-maybe_disable_transparent_hugepages(void* addr, size_t len) {
-    if (!use_transparent_hugepages.load(std::memory_order_relaxed)) {
-        ::madvise(addr, len, MADV_NOHUGEPAGE);
-    }
-}
-
 void cpu_pages::free_large(void* ptr) {
     pageidx idx = (reinterpret_cast<char*>(ptr) - mem()) / page_size;
     page* span = &pages[idx];
 #ifdef SEASTAR_HEAPPROF
-    if (span->alloc_site) {
+    if (span->alloc_site)
+    {
         auto alloc_site = span->alloc_site;
         remove_alloc_site(alloc_site, span->span_size * page_size);
     }
@@ -1011,7 +996,8 @@ size_t cpu_pages::object_size(void* ptr) {
     if (span->pool) {
         auto s = span->pool->object_size();
 #ifdef SEASTAR_HEAPPROF
-        if (span->pool->is_sampled_pool()) {
+        if (span->pool->is_sampled_pool())
+        {
             // We must not allow the object to be extended onto the allocation_site_ptr field.
             if (!span->pool->objects_page_aligned()) {
                 s -= sizeof(allocation_site_ptr);
@@ -1059,7 +1045,8 @@ inline void cpu_pages::free(void* ptr) {
     if (span->pool) {
         small_pool& pool = *span->pool;
 #ifdef SEASTAR_HEAPPROF
-        if (pool.is_sampled_pool()) {
+        if (pool.is_sampled_pool())
+        {
             allocation_site_ptr alloc_site = pool.alloc_site_holder(ptr);
             remove_alloc_site(alloc_site, pool.object_size());
         }
@@ -1122,20 +1109,21 @@ cpu_pages::try_free_fastpath(void* ptr) {
     return false;
 }
 
+
+struct no_size {};
+
 /// Helper to allow a single implementation for sized and non-sized functions.
-/// Indicator to allow a single implementation for sized and non-sized functions.
 /// The size parameter will be either no_size tag type or size_t, and most
 /// of the implementation can be shared, using constexpr if or other dispatch
 /// in the places where there should be a difference of behavior.
-struct no_size {};
+template<typename T>
+concept SizeOrNot = std::same_as<T, size_t> || std::same_as<T, no_size>;
 
-template <typename S>
-requires std::same_as<S, size_t> || std::same_as<S, no_size>
 [[gnu::noinline]]
-static void free_slowpath(void* obj, S size) {
+static void free_slowpath(void* obj, SizeOrNot auto size) {
     if (cpu_pages::is_local_pointer(obj)) {
         alloc_stats::increment_local(alloc_stats::types::frees);
-        if constexpr (std::is_same_v<decltype(size), no_size>) {
+        if constexpr (std::same_as<decltype(size), no_size>) {
             get_cpu_mem().free(obj);
         } else {
             get_cpu_mem().free(obj, size);
@@ -1214,6 +1202,7 @@ bool cpu_pages::initialize() {
     cpu_id = cpu_id_gen.fetch_add(1, std::memory_order_relaxed);
     local_expected_cpu_id = (static_cast<uint64_t>(cpu_id) << cpu_id_shift)
 	        | reinterpret_cast<uintptr_t>(mem_base());
+    local_expected_cpu_id_unshifted = local_expected_cpu_id >> cpu_id_shift;
     assert(cpu_id < max_cpus);
     all_cpus[cpu_id] = this;
     auto base = mem_base() + (size_t(cpu_id) << cpu_id_shift);
@@ -1382,11 +1371,7 @@ void cpu_pages::set_min_free_pages(size_t pages) {
 }
 
 small_pool::small_pool(unsigned object_size, bool is_sampled) noexcept
-    : _object_size(object_size)
-#ifdef SEASTAR_HEAPPROF
-    , _sampled_pool(is_sampled)
-#endif
-    {
+    : _object_size(object_size), _sampled_pool(is_sampled) {
     unsigned span_size = 1;
     auto span_bytes = [&] { return span_size * page_size; };
     auto waste = [&] { return (span_bytes() % _object_size) / (1.0 * span_bytes()); };
@@ -1588,18 +1573,16 @@ enum class alignment_t { aligned, unaligned };
 template<alignment_t alignment>
 void* allocate_from_sampled_small_pool(size_t size) {
     size = object_size_with_alloc_site(size);
-    if constexpr (alignment == alignment_t::aligned) {
+    if constexpr (alignment == alignment_t::aligned)
+    {
         size = 1 << log2ceil(size);
     }
     auto idx = small_pool::size_to_idx(size);
     auto& pool = get_cpu_mem().sampled_small_pools[idx];
     dassert(size <= pool.object_size());
     void* ptr = pool.allocate();
-    if (__builtin_expect(ptr != nullptr, true)) {
-        // we failed to allocate, so we won't sample either
-        auto alloc_site = get_cpu_mem().add_alloc_site(pool.object_size());
-        new (&pool.alloc_site_holder(ptr)) allocation_site_ptr{alloc_site};
-    }
+    auto alloc_site = get_cpu_mem().add_alloc_site(pool.object_size());
+    new (&pool.alloc_site_holder(ptr)) allocation_site_ptr{alloc_site};
     return ptr;
 }
 
@@ -1608,7 +1591,8 @@ void* allocate_from_sampled_small_pool(size_t size) {
 template<alignment_t alignment>
 void* allocate_from_small_pool(size_t size)
 {
-    if constexpr (alignment == alignment_t::aligned) {
+    if constexpr (alignment == alignment_t::aligned)
+    {
         size = 1 << log2ceil(size);
     }
     auto idx = small_pool::size_to_idx(size);
@@ -1623,15 +1607,64 @@ void* allocate_from_small_pool(size_t size)
  */
 [[gnu::always_inline]]
 static inline void* finish_allocation(void* ptr, size_t size) {
-    alloc_stats::increment_local(alloc_stats::types::allocs);
-    if (__builtin_expect(!ptr, false)) {
+    if (!ptr) {
         on_allocation_failure(size);
     } else {
 #ifdef SEASTAR_DEBUG_ALLOCATIONS
-        std::memset(ptr, debug_allocation_pattern, size);
+    std::memset(ptr, debug_allocation_pattern, size);
 #endif
     }
+    alloc_stats::increment_local(alloc_stats::types::allocs);
     return ptr;
+}
+
+void *allocate_slowpath(size_t size) {
+    if (!is_reactor_thread) {
+        if (original_malloc_func) {
+            alloc_stats::increment(alloc_stats::types::foreign_mallocs);
+            return original_malloc_func(size);
+        }
+        // original_malloc_func might be null for allocations before main
+        // in constructors before original_malloc_func ctor is called
+        init_cpu_mem();
+    }
+    auto idx = small_pool::size_to_idx(size);
+    auto& pool = get_cpu_mem().sampled_small_pools[idx];
+    dassert(size <= pool.object_size());
+    void* ptr = pool.allocate();
+    if (__builtin_expect(ptr != nullptr, true)) {
+        // we failed to allocate, so we won't sample either
+        auto alloc_site = get_cpu_mem().add_alloc_site(pool.object_size());
+        new (&pool.alloc_site_holder(ptr)) allocation_site_ptr{alloc_site};
+    }
+    // On the fast path we've already called maybe_sample, except in the case
+    // of !is_reactor_thread (we don't sample such alloctions).
+    bool should_sample = get_cpu_mem().definitely_sample(size);
+    void* ptr;
+    if (size <= max_small_allocation) {
+#ifdef SEASTAR_HEAPPROF
+        if (should_sample) {
+            ptr = allocate_from_sampled_small_pool<alignment_t::unaligned>(size);
+        } else
+#endif
+        {
+            ptr = allocate_from_small_pool<alignment_t::unaligned>(size);
+        }
+    } else {
+        ptr = allocate_large(size, should_sample);
+    }
+    return finish_allocation(ptr, size);
+}
+
+[[gnu::always_inline]]
+inline void* allocate(size_t size) {
+    if (__builtin_expect(is_reactor_thread && !get_cpu_mem().maybe_sample(size) && size <= max_small_allocation, true)) {
+        size = std::max(size, sizeof(free_object));
+        auto ptr = allocate_from_small_pool<alignment_t::unaligned>(size);
+        return finish_allocation(ptr, size);
+    }
+
+    return allocate_slowpath(size);
 }
 
 void *allocate_slowpath(size_t size) {
@@ -1749,14 +1782,6 @@ void* allocate_aligned(size_t align, size_t size) {
     return ptr;
 }
 
-
-/// Similarly to memory::allocate() we expect to inline the whole fast path
-/// of free into all the variations of the top level dallocation functions like
-/// free, delete, sized delete, etc. The slow path is not inline and is shared
-/// by all implementations.
-///
-/// The S template object allows us to handle both sized and unsized allocations
-/// in the same code path.
 template <typename S = no_size>
 [[gnu::always_inline]]
 inline void free(void* obj, S size = {}) {
@@ -2187,9 +2212,9 @@ std::vector<allocation_site> sampled_memory_profile() {
     return ret;
 }
 
-size_t sampled_memory_profile(allocation_site* output, size_t size) {
-    auto to_copy = std::min(size, get_cpu_mem().asu.alloc_sites.size());
-    std::copy_n(get_cpu_mem().asu.alloc_sites.begin(), to_copy, output);
+size_t sampled_memory_profile(std::vector<allocation_site>& output) {
+    auto to_copy = std::min(output.size(), get_cpu_mem().asu.alloc_sites.size());
+    std::copy_n(get_cpu_mem().asu.alloc_sites.begin(), to_copy, output.begin());
     return to_copy;
 }
 
@@ -2594,7 +2619,7 @@ std::vector<allocation_site> sampled_memory_profile() {
     return {};
 }
 
-size_t sampled_memory_profile(allocation_site* output, size_t size) {
+size_t sampled_memory_profile(std::vector<allocation_site>&) {
     return 0;
 }
 

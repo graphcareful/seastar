@@ -201,11 +201,14 @@ set_request_content(std::unique_ptr<http::request> req, input_stream<char>* cont
     }
 }
 
-void connection::generate_error_reply_and_close(std::unique_ptr<http::request> req, http::reply::status_type status, const sstring& msg) {
+void connection::generate_error_reply_and_close(std::unique_ptr<http::request> req, reply::status_type status, const sstring& msg, const sstring &content_type) {
     auto resp = std::make_unique<http::reply>();
     // TODO: Handle HTTP/2.0 when it releases
     resp->set_version(req->_version);
     resp->set_status(status, msg);
+    if (!content_type.empty()) {
+        resp->set_content_type(content_type);
+    }
     resp->done();
     _done = true;
     _replies.push(std::move(resp));
@@ -220,10 +223,7 @@ future<> connection::read_one() {
         }
         ++_server._requests_served;
         std::unique_ptr<http::request> req = _parser.get_parsed_request();
-
-        req->_server_address = this->_server_addr;
-        req->_client_address = this->_client_addr;
-
+        req->listener_idx = _listener_idx;
         if (_tls) {
             req->protocol_name = "https";
         }
@@ -291,7 +291,7 @@ future<> connection::read_one() {
                     // before passing the request to handler - when we were parsing chunks
                     auto err_req = std::make_unique<http::request>();
                     err_req->_version = version;
-                    generate_error_reply_and_close(std::move(err_req), e.status(), e.str());
+                    generate_error_reply_and_close(std::move(err_req), e.status(), e.str(), e.content_type());
                 });
             });
         });
@@ -389,8 +389,8 @@ void http_server::set_content_streaming(bool b) {
     _content_streaming = b;
 }
 
-future<> http_server::listen(socket_address addr, listen_options lo, 
-            server_credentials_ptr listener_credentials) {
+future<> http_server::listen(socket_address addr, listen_options lo,
+            shared_ptr<seastar::tls::server_credentials> listener_credentials) {
     if (listener_credentials) {
         _listeners.push_back(seastar::tls::listen(listener_credentials, addr, lo));
     } else {
@@ -404,7 +404,7 @@ future<> http_server::listen(socket_address addr, listen_options lo) {
 }
 
 future<> http_server::listen(socket_address addr,
-            server_credentials_ptr listener_credentials) {
+            shared_ptr<seastar::tls::server_credentials> listener_credentials) {
     listen_options lo;
     lo.reuse_address = true;
     return listen(addr, lo, listener_credentials);
@@ -438,15 +438,10 @@ future<> http_server::do_accepts(int which, bool tls) {
     return make_ready_future<>();
 }
 
-future<> http_server::do_accepts(int which){
-    return do_accepts(which, _credentials != nullptr);
-}
-
 future<> http_server::do_accept_one(int which, bool tls) {
-    return _listeners[which].accept().then([this, tls] (accept_result ar) mutable {
-        auto local_address = ar.connection.local_address();
+    return _listeners[which].accept().then([this, tls, which] (accept_result ar) mutable {
         auto conn = std::make_unique<connection>(*this, std::move(ar.connection),
-                std::move(ar.remote_address), std::move(local_address), tls);
+                            std::move(ar.remote_address), tls, which);
         (void)try_with_gate(_task_gate, [conn = std::move(conn)]() mutable {
             return conn->process().handle_exception([conn = std::move(conn)] (std::exception_ptr ex) {
                 hlogger.error("request error: {}", ex);

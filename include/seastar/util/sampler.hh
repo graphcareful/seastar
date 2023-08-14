@@ -34,7 +34,9 @@
 
 #pragma once
 
+#ifndef SEASTAR_MODULE
 #include <random>
+#endif
 
 // See also: https://perfetto.dev/docs/design-docs/heapprofd-sampling for more
 // background of how the sampler works
@@ -57,12 +59,12 @@ public:
         sampling_rate_ = 1.0 / static_cast<double>(sampling_interval_);
         interval_to_next_sample_ = next_sampling_interval();
     }
-    /// Updates the sampling state (byte remaining until next sample) and
-    /// returns true if this allocation of size `alloc_size` may be sampled.
-    /// Specifically, if it returns false, this allocation is definitely not
-    /// samples. However if it returns true, it is not yet determiined whether
-    /// a sample should be taken. Instead, definitely_sample should be called
-    /// and if it returns true, a sample is called for.
+    /// Updates the sampling state (byte remaining until next sample) and returns
+    /// true if this allocation of size `alloc_size` may be sampled.
+    /// Specifically, if it returns false, this allocation is definitely not 
+    /// sampled. However if it returns true, it is not yet determined whether
+    /// a sample should be taken. Instead, definitely_sample should be called and
+    /// if it returns true, a sample is called for.
     [[gnu::always_inline]]
     bool maybe_sample(size_t alloc_size) {
         return (interval_to_next_sample_ -= alloc_size) < 0;
@@ -140,7 +142,7 @@ private:
                 interval_to_next_sample_ += alloc_size;
             }
             else {
-                while (interval_to_next_sample_ < 0) {
+                while (interval_to_next_sample_ <= 0) {
                     interval_to_next_sample_ += next_sampling_interval();
                 }
             }
@@ -157,10 +159,7 @@ private:
 
     uint64_t sampling_interval_; // Sample every N bytes ; 0 means off
     double sampling_rate_; // 1 / sampling_interval_ ; used by the exp distribution
-    // How many bytes remain to be allocated before we take a sample.
-    // Specifically, if this member has value N, a sample will be taken of the allocation
-    // that allocates the Nth+1 byte.
-    int64_t interval_to_next_sample_;
+    int64_t interval_to_next_sample_; // Next time we are going to take a sample
     std::random_device rd_device;
     std::mt19937_64 random_gen;
 };
