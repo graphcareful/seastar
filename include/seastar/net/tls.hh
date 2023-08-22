@@ -309,12 +309,10 @@ namespace tls {
         sstring _priority;
     };
 
-    /// TLS configuration options
     struct tls_options {
-        /// \brief whether to wait for EOF from server on session termination
+        // Optionally indicate to the client if it should wait for an EOF from the server
+        // after sending the BYE message. By default, the wait is hardcoded to 10 seconds.
         bool wait_for_eof_on_shutdown = true;
-        /// \brief server name to be used for the SNI TLS extension
-        sstring server_name = {};
     };
 
     /**
@@ -363,27 +361,12 @@ namespace tls {
     /// @}
 
     /**
-     * Creates a socket through which a TLS client connection can be created,
-     * using the default network stack and the supplied credentials.
-     * Typically these should contain enough information
-     * to validate the remote certificate (i.e. trust info).
+     * Wraps an existing connection in SSL/TLS.
      *
      * \param options Optional additional session configuration
      */
     /// @{
-    ::seastar::socket socket(shared_ptr<certificate_credentials>, tls_options options = {});
-    /// @}
-
-    /**
-     * Wraps an existing connection in SSL/TLS.
-     *
-     * ATTN: The method is going to be deprecated
-     *
-     * \param name The expected server name for the remote end point
-     */
-    /// @{
-    [[deprecated("Use overload with tls_options parameter")]]
-    future<connected_socket> wrap_client(shared_ptr<certificate_credentials>, connected_socket&&, sstring name);
+    future<connected_socket> wrap_client(shared_ptr<certificate_credentials>, connected_socket&&, sstring name = {}, std::optional<tls_options> options = std::nullopt);
     future<connected_socket> wrap_server(shared_ptr<server_credentials>, connected_socket&&);
     /// @}
 
