@@ -201,7 +201,7 @@ set_request_content(std::unique_ptr<http::request> req, input_stream<char>* cont
     }
 }
 
-void connection::generate_error_reply_and_close(std::unique_ptr<http::request> req, reply::status_type status, const sstring& msg, const sstring &content_type) {
+void connection::generate_error_reply_and_close(std::unique_ptr<http::request> req, http::reply::status_type status, const sstring& msg, const sstring &content_type) {
     auto resp = std::make_unique<http::reply>();
     // TODO: Handle HTTP/2.0 when it releases
     resp->set_version(req->_version);
