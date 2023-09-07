@@ -48,7 +48,7 @@ public:
      * a base_exception with only a _status is specifying a string that may be wrapped
      * in e.g. a json_exception.
      */
-    base_exception(const std::string& msg, reply::status_type status, const std::string &content_type)
+    base_exception(const std::string& msg, http::reply::status_type status, const std::string &content_type)
             : _msg(msg), _status(status), _content_type(content_type) {
     }
 
@@ -79,7 +79,7 @@ private:
  */
 class redirect_exception : public base_exception {
 public:
-    redirect_exception(const std::string& url, reply::status_type status = reply::status_type::moved_permanently)
+    redirect_exception(const std::string& url, http::reply::status_type status = http::reply::status_type::moved_permanently)
             : base_exception("", status), url(url) {
     }
     std::string url;
