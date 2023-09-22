@@ -224,6 +224,9 @@ future<> connection::read_one() {
         ++_server._requests_served;
         std::unique_ptr<http::request> req = _parser.get_parsed_request();
         req->listener_idx = _listener_idx;
+        req->_server_address = _fd.local_address();
+        req->_client_address = _fd.remote_address();
+
         if (_tls) {
             req->protocol_name = "https";
         }
