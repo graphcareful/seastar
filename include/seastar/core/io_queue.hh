@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <limits>
 #ifndef SEASTAR_MODULE
 #include <boost/container/small_vector.hpp>
 #include <chrono>
@@ -154,9 +155,12 @@ public:
         bool duplex = false;
         std::chrono::duration<double> rate_limit_duration = std::chrono::milliseconds(1);
         size_t block_count_limit_min = 1;
-        unsigned flow_ratio_ticks = 100;
-        double flow_ratio_ema_factor = 0.95;
-        double flow_ratio_backpressure_threshold = 1.1;
+
+        // Original values of io-properties (if available)
+        size_t read_bytes_rate = std::numeric_limits<size_t>::max();
+        size_t write_bytes_rate = std::numeric_limits<size_t>::max();
+        size_t read_req_rate = std::numeric_limits<size_t>::max();
+        size_t write_req_rate = std::numeric_limits<size_t>::max();
     };
 
     io_queue(io_group_ptr group, internal::io_sink& sink);
