@@ -268,6 +268,7 @@ namespace tls {
     class reloadable_credentials_base;
 
     using reload_callback = std::function<void(const std::unordered_set<sstring>&, std::exception_ptr)>;
+    using reload_callback_with_creds = std::function<void(const std::unordered_set<sstring>&, const certificate_credentials&, std::exception_ptr)>;
 
     /**
      * Intentionally "primitive", and more importantly, copyable
@@ -305,7 +306,9 @@ namespace tls {
         // same as above, but any files used for certs/keys etc will be watched
         // for modification and reloaded if changed
         future<shared_ptr<certificate_credentials>> build_reloadable_certificate_credentials(reload_callback = {}, std::optional<std::chrono::milliseconds> tolerance = {}) const;
+        future<shared_ptr<certificate_credentials>> build_reloadable_certificate_credentials(reload_callback_with_creds, std::optional<std::chrono::milliseconds> tolerance = {}) const;
         future<shared_ptr<server_credentials>> build_reloadable_server_credentials(reload_callback = {}, std::optional<std::chrono::milliseconds> tolerance = {}) const;
+        future<shared_ptr<server_credentials>> build_reloadable_server_credentials(reload_callback_with_creds, std::optional<std::chrono::milliseconds> tolerance = {}) const;
     private:
         friend class reloadable_credentials_base;
 
@@ -484,26 +487,3 @@ namespace tls {
     extern const int ERROR_PREMATURE_TERMINATION;
 }
 }
-
-template <> struct fmt::formatter<seastar::tls::subject_alt_name_type> : fmt::formatter<std::string_view> {
-    template <typename FormatContext>
-    auto format(seastar::tls::subject_alt_name_type type, FormatContext& ctx) const {
-        return formatter<std::string_view>::format(format_as(type), ctx);
-    }
-};
-
-template <> struct fmt::formatter<seastar::tls::subject_alt_name::value_type> : fmt::formatter<std::string_view> {
-    template <typename FormatContext>
-    auto format(const seastar::tls::subject_alt_name::value_type& value, FormatContext& ctx) const {
-        return std::visit([&](const auto& v) {
-            return fmt::format_to(ctx.out(), "{}", v);
-        }, value);
-    }
-};
-
-template <> struct fmt::formatter<seastar::tls::subject_alt_name> : fmt::formatter<std::string_view> {
-    template <typename FormatContext>
-    auto format(const seastar::tls::subject_alt_name& name, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}={}", name.type, name.value);
-    }
-};
