@@ -423,6 +423,7 @@ public:
 private:
     friend class credentials_builder;
     friend class session;
+    friend void* get_impl(certificate_credentials const&);
 
     bool need_load_system_trust() const {
         return _load_system_trust;
@@ -1964,6 +1965,9 @@ std::ostream& tls::operator<<(std::ostream& os, const subject_alt_name& a) {
     return os << a.type << "=" << a.value;
 }
 
+void* tls::get_impl(const tls::certificate_credentials &creds) {
+    return creds._impl->_creds;
+}
 
 }
 
