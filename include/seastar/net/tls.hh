@@ -156,6 +156,10 @@ namespace tls {
      */
     using dn_callback = noncopyable_function<void(session_type type, sstring subject, sstring issuer)>;
 
+    class certificate_credentials;
+    void* get_impl(certificate_credentials const&);
+
+
     /**
      * Holds certificates and keys.
      *
@@ -228,6 +232,7 @@ namespace tls {
         friend class credentials_builder;
         template<typename Base>
         friend class reloadable_credentials;
+        friend void* get_impl(const certificate_credentials &creds);
         shared_ptr<impl> _impl;
     };
 
