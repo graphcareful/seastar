@@ -93,8 +93,26 @@ public:
     connection(http_server& server, connected_socket&& fd, socket_address, bool tls, int listener_idx)
             : connection(server, std::move(fd), tls, listener_idx) {}
     connection(http_server& server, connected_socket&& fd, bool tls, int listener_idx)
-            : _server(server), _fd(std::move(fd)), _read_buf(_fd.input()), _write_buf(
-                    _fd.output()), _tls(tls), _listener_idx(listener_idx) {
+            : _server(server)
+            , _fd(std::move(fd))
+            , _read_buf(_fd.input())
+            , _write_buf(_fd.output())
+            , _client_addr(_fd.remote_address())
+            , _server_addr(_fd.local_address())
+            , _tls(tls)
+            , _listener_idx(listener_idx) {
+        on_new_connection();
+    }
+    connection(http_server& server, connected_socket&& fd, bool tls, int listener_idx,
+            socket_address client_addr, socket_address server_addr)
+            : _server(server)
+            , _fd(std::move(fd))
+            , _read_buf(_fd.input())
+            , _write_buf(_fd.output())
+            , _client_addr(std::move(client_addr))
+            , _server_addr(std::move(server_addr))
+            , _tls(tls)
+            , _listener_idx(listener_idx) {
         on_new_connection();
     }
     ~connection();
