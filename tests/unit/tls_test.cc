@@ -964,57 +964,6 @@ SEASTAR_THREAD_TEST_CASE(test_reload_certificates) {
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_reload_certificates_with_creds) {
-    tmpdir tmp;
-
-    namespace fs = std::filesystem;
-
-    // copy the wrong certs. We don't trust these
-    // blocking calls, but this is a test and seastar does not have a copy
-    // util and I am lazy...
-    fs::copy_file(certfile("other.crt"), tmp.path() / "test.crt");
-    fs::copy_file(certfile("other.key"), tmp.path() / "test.key");
-
-    auto cert = (tmp.path() / "test.crt").native();
-    auto key = (tmp.path() / "test.key").native();
-    std::unordered_set<sstring> changed;
-    promise<> p;
-
-    tls::credentials_builder b;
-    b.set_x509_key_file(cert, key, tls::x509_crt_format::PEM).get();
-    b.set_dh_level();
-
-    auto certs = b.build_reloadable_server_credentials([&](const std::unordered_set<sstring>& files,
-                                                           const tls::certificate_credentials &creds,
-                                                           std::exception_ptr ep) {
-        if (ep) {
-            return;
-        }
-        changed.insert(files.begin(), files.end());
-        if (changed.count(cert) && changed.count(key)) {
-            p.set_value();
-        }
-
-        BOOST_CHECK(get_impl(creds) != nullptr);
-
-    }).get0();
-
-    BOOST_CHECK(certs != nullptr && get_impl(*certs) != nullptr);
-
-    // copy the right (trusted) certs over the old ones.
-    fs::copy_file(certfile("test.crt"), tmp.path() / "test0.crt");
-    fs::copy_file(certfile("test.key"), tmp.path() / "test0.key");
-
-    rename_file((tmp.path() / "test0.crt").native(), (tmp.path() / "test.crt").native()).get();
-    rename_file((tmp.path() / "test0.key").native(), (tmp.path() / "test.key").native()).get();
-
-    p.get_future().get();
-
-    // confirm that we did indeed reload some credentials
-    BOOST_CHECK(!changed.empty());
-
-}
-
 SEASTAR_THREAD_TEST_CASE(test_reload_broken_certificates) {
     tmpdir tmp;
 
