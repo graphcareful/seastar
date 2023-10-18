@@ -295,12 +295,6 @@ public:
         throw_system_error_on(r == -1, "getsockname");
         return addr;
     }
-    socket_address get_remote_address() {
-        socket_address addr;
-        auto r = ::getpeername(_fd, &addr.u.sa, &addr.addr_length);
-        throw_system_error_on(r == -1, "getpeername");
-        return addr;
-    }
     void listen(int backlog) {
         auto fd = ::listen(_fd, backlog);
         throw_system_error_on(fd == -1, "listen");
