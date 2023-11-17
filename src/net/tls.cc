@@ -1487,7 +1487,7 @@ public:
         // cases where we would do an extra syscall for something like a 100
         // bytes header we linearize the packet if it's below the max TLS record
         // size.
-        if (p.nr_frags() > 1 && p.len() <= gnutls_record_get_max_size(*this)) {
+        if (p.nr_frags() > 1 && p.len() <= 16384) {
             p.linearize();
         }
 
