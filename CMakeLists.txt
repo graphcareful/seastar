@@ -698,6 +698,8 @@ add_library (seastar STATIC
   src/util/tmp_file.cc
   src/websocket/server.cc)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 add_library (Seastar::seastar ALIAS seastar)
 
 add_dependencies (seastar
