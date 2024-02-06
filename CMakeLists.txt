@@ -399,6 +399,8 @@ find_package (ragel 6.10 REQUIRED)
 find_package (Threads REQUIRED)
 find_package (PthreadSetName REQUIRED)
 find_package (Valgrind REQUIRED)
+find_package (OpenSSL REQUIRED)
+
 
 cmake_dependent_option (Seastar_LOGGER_COMPILE_TIME_FMT
   "Enable the compile-time {fmt} check when formatting logging messages" ON
@@ -752,6 +754,7 @@ add_library (seastar
   src/net/stack.cc
   src/net/tcp.cc
   src/net/tls.cc
+  src/net/ossl.cc
   src/net/udp.cc
   src/net/unix_address.cc
   src/net/virtio.cc
@@ -828,6 +831,8 @@ target_link_libraries (seastar
   PRIVATE
     ${CMAKE_DL_LIBS}
     GnuTLS::gnutls
+    OpenSSL::SSL
+    OpenSSL::Crypto
     StdAtomic::atomic
     lksctp-tools::lksctp-tools
     protobuf::libprotobuf
