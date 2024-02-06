@@ -59,8 +59,10 @@ if (${Seastar_API_LEVEL} GREATER_EQUAL 3)
     SOURCES coroutines_demo.cc)
 endif ()
 
+if (NOT ${Seastar_WITH_OSSL})
 seastar_add_demo (websocket
   SOURCES websocket_demo.cc)
+endif ()
 
 seastar_add_demo (echo
   SOURCES echo_demo.cc)
