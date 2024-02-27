@@ -146,6 +146,10 @@ namespace tls {
      */
     using dn_callback = noncopyable_function<void(session_type type, sstring subject, sstring issuer)>;
 
+    enum class client_auth {
+        NONE, REQUEST, REQUIRE
+    };
+
     /**
      * Holds certificates and keys.
      *
@@ -210,6 +214,9 @@ namespace tls {
          */
         void set_dn_verification_callback(dn_callback);
 
+        /// TODO(rob) comment these
+        void enable_load_system_trust();
+        void set_client_auth(client_auth);
     private:
         class impl;
         friend class session;
@@ -225,10 +232,6 @@ namespace tls {
     class verification_error : public std::runtime_error {
     public:
         using runtime_error::runtime_error;
-    };
-
-    enum class client_auth {
-        NONE, REQUEST, REQUIRE
     };
 
     /**

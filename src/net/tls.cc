@@ -317,7 +317,7 @@ public:
         _dn_callback = std::move(cb);
     }
 private:
-    friend class credentials_builder;
+    friend class certificate_credentials;
     friend class session;
 
     bool need_load_system_trust() const {
@@ -384,6 +384,14 @@ void tls::certificate_credentials::set_priority_string(const sstring& prio) {
 
 void tls::certificate_credentials::set_dn_verification_callback(dn_callback cb) {
     _impl->set_dn_verification_callback(std::move(cb));
+}
+
+void tls::certificate_credentials::enable_load_system_trust() {
+    _impl->_load_system_trust = true;
+}
+
+void tls::certificate_credentials::set_client_auth(client_auth ca) {
+    _impl->set_client_auth(ca);
 }
 
 tls::server_credentials::server_credentials()
