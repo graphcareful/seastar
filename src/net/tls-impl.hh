@@ -47,6 +47,17 @@ public:
 
 namespace tls {
 
+class session_impl {
+public:
+    virtual future<> put(net::packet) = 0;
+    virtual future<> flush() noexcept = 0;
+    virtual future<temporary_buffer<char>> get() = 0;
+    virtual void close() = 0;
+    virtual future<std::optional<session_dn>> get_distinguished_name() = 0;
+    virtual seastar::net::connected_socket_impl & socket() const = 0;
+    virtual future<std::vector<subject_alt_name>> get_alt_name_information(std::unordered_set<subject_alt_name_type>) = 0;
+};
+
 struct session_ref {
     session_ref() = default;
     session_ref(shared_ptr<session_impl> session)

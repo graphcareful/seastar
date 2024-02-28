@@ -419,7 +419,7 @@ namespace tls {
  * of these, since we handle handshake etc.
  *
  */
-class session : public enable_lw_shared_from_this<session> {
+class session : public enable_shared_from_this<session>, public session_impl {
 public:
     enum class type
         : uint32_t {
@@ -691,7 +691,7 @@ public:
         }
     }
 
-    future<temporary_buffer<char>> get() {
+    future<temporary_buffer<char>> get() override {
         if (_error) {
             return make_exception_future<temporary_buffer<char>>(_error);
         }
@@ -783,7 +783,7 @@ public:
             });
         });
     }
-    future<> put(net::packet p) {
+    future<> put(net::packet p) override {
         if (_error) {
             return make_exception_future<>(_error);
         }
@@ -943,7 +943,7 @@ public:
         // below, get pre-empted, have "close()" finish, get freed, and 
         // then call wait_for_eof on stale pointer.
     }
-    void close() noexcept {
+    void close() noexcept override {
         // only do once.
         if (!std::exchange(_shutdown, true)) {
             auto me = shared_from_this();
@@ -970,17 +970,17 @@ public:
         }
     }
     // helper for sink
-    future<> flush() noexcept {
+    future<> flush() noexcept override {
         return with_semaphore(_out_sem, 1, [this] {
             return _out.flush();
         });
     }
 
-    seastar::net::connected_socket_impl & socket() const {
+    seastar::net::connected_socket_impl & socket() const override {
         return *_sock;
     }
 
-    future<std::optional<session_dn>> get_distinguished_name() {
+    future<std::optional<session_dn>> get_distinguished_name() override {
         using result_t = std::optional<session_dn>;
         if (_error) {
             return make_exception_future<result_t>(_error);
@@ -996,7 +996,7 @@ public:
         result_t dn = extract_dn_information();
         return make_ready_future<result_t>(std::move(dn));
     }
-    future<std::vector<subject_alt_name>> get_alt_name_information(std::unordered_set<subject_alt_name_type> types) {
+    future<std::vector<subject_alt_name>> get_alt_name_information(std::unordered_set<subject_alt_name_type> types) override {
         using result_t = std::vector<subject_alt_name>;
 
         if (_error) {
@@ -1086,7 +1086,6 @@ public:
         });
     }
 
-    struct session_ref;
 private:
 
     using x509_ctr_ptr = std::unique_ptr<gnutls_x509_crt_int, void (*)(gnutls_x509_crt_t)>;
@@ -1144,13 +1143,13 @@ private:
 }
 
 future<connected_socket> tls::wrap_client(shared_ptr<certificate_credentials> cred, connected_socket&& s, tls_options options) {
-    session::session_ref sess(make_shared<session>(session::type::CLIENT, std::move(cred), std::move(s), options));
+    session_ref sess(make_shared<session>(session::type::CLIENT, std::move(cred), std::move(s), options));
     connected_socket sock(std::make_unique<tls_connected_socket_impl>(std::move(sess)));
     return make_ready_future<connected_socket>(std::move(sock));
 }
 
 future<connected_socket> tls::wrap_server(shared_ptr<server_credentials> cred, connected_socket&& s) {
-    session::session_ref sess(make_shared<session>(session::type::SERVER, std::move(cred), std::move(s)));
+    session_ref sess(make_shared<session>(session::type::SERVER, std::move(cred), std::move(s)));
     connected_socket sock(std::make_unique<tls_connected_socket_impl>(std::move(sess)));
     return make_ready_future<connected_socket>(std::move(sock));
 }
