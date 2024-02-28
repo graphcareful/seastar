@@ -395,7 +395,7 @@ namespace tls {
  * of these, since we handle handshake etc.
  *
  */
-class session : public enable_lw_shared_from_this<session> {
+class session : public enable_shared_from_this<session>, public session_impl {
 public:
     enum class type
         : uint32_t {
@@ -690,7 +690,7 @@ public:
         }
     }
 
-    future<temporary_buffer<char>> get() {
+    future<temporary_buffer<char>> get() override {
         if (_error) {
             return make_exception_future<temporary_buffer<char>>(_error);
         }
@@ -782,7 +782,7 @@ public:
             });
         });
     }
-    future<> put(net::packet p) {
+    future<> put(net::packet p) override {
         if (_error) {
             return make_exception_future<>(_error);
         }
@@ -914,7 +914,7 @@ public:
         // below, get pre-empted, have "close()" finish, get freed, and
         // then call wait_for_eof on stale pointer.
     }
-    void close() {
+    void close() noexcept override {
         // only do once.
         if (!std::exchange(_shutdown, true)) {
             auto me = shared_from_this();
@@ -941,13 +941,13 @@ public:
         }
     }
     // helper for sink
-    future<> flush() noexcept {
+    future<> flush() noexcept override {
         return with_semaphore(_out_sem, 1, [this] {
             return _out.flush();
         });
     }
 
-    seastar::net::connected_socket_impl & socket() const {
+    seastar::net::connected_socket_impl & socket() const override {
         return *_sock;
     }
 
