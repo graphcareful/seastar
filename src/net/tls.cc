@@ -27,8 +27,6 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/seastar.hh>
-#include <seastar/core/file.hh>
-#include <seastar/core/thread.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/timer.hh>
@@ -38,11 +36,6 @@
 #include <seastar/net/stack.hh>
 #include <seastar/util/std-compat.hh>
 #include <seastar/util/variant_utils.hh>
-
-#include <boost/range/iterator_range.hpp>
-#include <boost/range/adaptor/map.hpp>
-
-#include "../core/fsnotify.hh"
 
 namespace seastar {
 
