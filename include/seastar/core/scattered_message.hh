@@ -46,6 +46,7 @@ public:
     scattered_message() {}
     scattered_message(scattered_message&&) = default;
     scattered_message(const scattered_message&) = delete;
+    scattered_message& operator=(scattered_message&&) = default;
 
     void append_static(const char_type* buf, size_t size) {
         if (size) {
