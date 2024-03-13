@@ -464,6 +464,194 @@ void tls::server_credentials::set_client_auth(client_auth ca) {
 
 namespace tls {
 
+class scattered_bio {
+public:
+    explicit scattered_bio(sstring name, data_sink& out) : _name(name), _out(out) {
+        initialize_bio();
+    }
+
+    ~scattered_bio() {
+        // assert(_closed);
+        if (_bio != nullptr) {
+            BIO_free(_bio);
+        }
+        if (_method != nullptr) {
+            BIO_meth_free(_method);
+        }
+    }
+
+    BIO* bio() const {
+        return _bio;
+    }
+
+    bool empty() const { return _p.len() == 0; }
+
+    void bio_clear() {
+        BIO_clear_retry_flags(_bio);
+    }
+
+    future<> do_flush() {
+        if (!empty()) {
+            auto old_p = std::exchange(_p, net::packet());
+            netlogger.info("Inside do flush! {} - writing {} bytes", _name, old_p.len());
+            return _out.put(std::move(old_p)).then([this](){ return _out.flush(); });
+        }
+        return make_ready_future<>();
+    }
+
+
+private:
+    static scattered_bio* from_stored_bio_ptr(void* ptr) {
+        return static_cast<scattered_bio*>(ptr);
+    }
+
+    static int do_bio_write(BIO* bio, const char * data, int size) {
+        netlogger.info("Within scattered_bio::do_bio_write");
+        if (!bio || !data) {
+            return 0;
+        }
+
+        scattered_bio* ptr = from_stored_bio_ptr(BIO_get_data(bio));
+        if (ptr == nullptr || ptr->_bio != bio) {
+            return 0;
+        }
+
+        if (size == 0) {
+            ptr->_closed = true;
+            return 0;
+        }
+        netlogger.info("Performing scattered_bio::do_bio_write: {} - size: {}", ptr->_name, size);
+        ptr->_p.append(net::packet(data, size_t(size)));
+        return size;
+    }
+
+    static int do_bio_read(BIO* bio, char * data, int size) {
+        netlogger.info("Within scattered_bio::do_read");
+
+        if (!bio || !data) {
+            return 0;
+        }
+
+        scattered_bio *ptr = from_stored_bio_ptr(BIO_get_data(bio));
+        if (ptr == nullptr || ptr->_bio != bio) {
+            return 0;
+        }
+
+        if (ptr->_p.len() == 0) {
+            // indicate theres no data, retry later
+            BIO_set_retry_read(ptr->_bio);
+            return -1;
+        }
+
+        netlogger.info("Performing scattered_bio::do_read: {}", ptr->_name);
+        const auto begin = ptr->_p.fragments().begin();
+        const auto end = ptr->_p.fragments().end();
+        auto cur = begin;
+        size_t bytes_read = 0;
+        netlogger.info("Total buffer size: {} requested read: {}", ptr->_p.len(), size);
+
+        while(cur != end && bytes_read < size) {
+            const auto bytes_remaining = size - bytes_read;
+            const auto bytes_to_copy = std::min(cur->size, bytes_remaining);
+            netlogger.info("Frag size: {}, Bytes remaining: {}, to copy: {}", cur->size, bytes_remaining, bytes_to_copy);
+            std::memcpy(data, cur->base, bytes_to_copy);
+            data += bytes_to_copy;
+            bytes_read += bytes_to_copy;
+            cur++;
+        }
+        ptr->_p.trim_front(bytes_read);
+        netlogger.info("Bytes read: {}", bytes_read);
+        return bytes_read;
+    }
+
+    static long do_bio_ctrl(BIO* bio, int cmd, long larg, void* parg) {
+        if (!bio) {
+            return 0;
+        }
+
+        scattered_bio *ptr = from_stored_bio_ptr(BIO_get_data(bio));
+        if (ptr == nullptr || ptr->_bio != bio) {
+            return 0;
+        }
+        // netlogger.info("Performing scattered_bio::do_bio_ctrl: {}", cmd);
+
+        switch(cmd) {
+        case BIO_CTRL_RESET:
+            ptr->_p = net::packet();
+            ptr->_closed = false;
+            break;
+        case BIO_CTRL_EOF:
+            return 0;
+        case BIO_CTRL_FLUSH:
+            // ptr->do_flush().get();
+            return 1;
+        case BIO_CTRL_GET_CLOSE:
+            return ptr->_closed;
+        case BIO_CTRL_SET_CLOSE:
+            ptr->_closed = (bool)larg;
+            break;
+        case BIO_CTRL_PENDING:
+            return ptr->_p.len();
+        case BIO_CTRL_GET_KTLS_RECV:
+        case BIO_CTRL_GET_KTLS_SEND:
+            // Explicity ignore
+            return 1;
+        default:
+            // Unsupported command
+            // netlogger.info("do_bio_ctrl didn't run unsupported command: {}", cmd);
+            return 0;
+        };
+        // Success
+        return 1;
+    }
+
+    static int do_bio_gets(BIO *, char *, int) {
+        netlogger.info("inside do_bio_gets");
+        return 1;
+    }
+
+    static int do_bio_puts(BIO*, const char*) {
+        netlogger.info("inside do_bio_puts");
+        return 1;
+    }
+
+    void initialize_bio() {
+        const int index = BIO_get_new_index();
+        if (index < 0) {
+            throw ossl_error("Couldn't get index for BIO_METHOD");
+        }
+
+        _method = BIO_meth_new(index | BIO_TYPE_MEM, "scattered_bio");
+        if (_method == nullptr) {
+            throw ossl_error("Couldn't allocate BIO_METHOD");
+        }
+
+        BIO_meth_set_write(_method, &do_bio_write);
+        BIO_meth_set_read(_method, &do_bio_read);
+        BIO_meth_set_ctrl(_method, &do_bio_ctrl);
+        BIO_meth_set_puts(_method, &do_bio_puts);
+        BIO_meth_set_gets(_method, &do_bio_gets);
+
+        _bio = BIO_new(_method);
+        if (_bio == nullptr) {
+            BIO_meth_free(_method);
+            _method = nullptr;
+            throw ossl_error("Couldn't make custom BIO");
+        }
+
+        // Internally store the 'this' pointer within the BIO so the static functions
+        // above may access the state within the respective instance of this class
+        BIO_set_data(_bio, this);
+    }
+
+    sstring _name;
+    data_sink& _out;
+    BIO_METHOD* _method;
+    BIO* _bio;
+    net::packet _p;
+    bool _closed{false};
+};
+
 /**
  * Session wraps gnutls session, and is the
  * actual conduit for an TLS/SSL data flow.
@@ -489,12 +677,10 @@ public:
             : _type(t), _sock(std::move(sock)), _creds(creds->_impl), _hostname(
                    std::move(name)), _in(_sock->source()), _out(_sock->sink()),
                    _in_sem(1), _out_sem(1),  _options(options.value_or(tls_options{})),
-                   _in_bio(BIO_new(BIO_s_mem())) , _out_bio(BIO_new(BIO_s_mem())),
+                   _in_bio(scattered_bio("in_bio", _out)) , _out_bio(scattered_bio("out_bio", _out)),
                    _ctx(make_ssl_context()),
                    _ssl(SSL_new(_ctx.get())) {
         if (!_ssl){
-            BIO_free(_in_bio);
-            BIO_free(_out_bio);
             throw ossl_error();
         }
         if (t == type::SERVER) {
@@ -516,7 +702,7 @@ public:
         }
         // SSL_set_bio transfers ownership of the read and write bios to the SSL
         // instance
-        SSL_set_bio(_ssl.get(), _in_bio, _out_bio);
+        SSL_set_bio(_ssl.get(), _in_bio.bio(), _out_bio.bio());
     }
 
     session(type t, shared_ptr<certificate_credentials> creds,
@@ -528,29 +714,12 @@ public:
     // This method pulls encrypted data from the SSL context and writes
     // it to the underlying socket.
     future<> pull_encrypted_and_send(){
-        netlogger.info("Inside session::pull_encrypted_and_send");
-        auto msg = make_lw_shared<scattered_message<char>>();
-        return do_until(
-            [this] { return BIO_ctrl_pending(_out_bio) == 0; },
-            [this, msg]{
-                // TODO(rob) avoid magic numbers
-                buf_type buf(4096);
-                auto n = BIO_read(_out_bio, buf.get_write(), buf.size());
-                netlogger.info("Consumed {} bytes from SSL out bio", n);
-                if (n > 0){
-                    buf.trim(n);
-                    msg->append(std::move(buf));
-                } else if (!BIO_should_retry(_out_bio)) {
-                    return make_exception_future<>(ossl_error());
-                }
-                return make_ready_future<>();
-        }).then([this, msg](){
-            if(msg->size() > 0){
-                netlogger.info("Sending {} bytes to client", msg->size());
-                return _out.put(std::move(*msg).release());
-            }
-            return make_ready_future<>();
-        });
+        netlogger.info("Inside pull encryped and send");
+        // BIO_flush(_out_bio.bio());
+        // TODO
+        // BIO_clear_retry_flags()
+        // will need to call this
+        return _out_bio.do_flush();
     }
 
     // This method puts unencrypted data is written into the SSL context.
@@ -578,10 +747,7 @@ public:
                     return make_exception_future<stop_iteration>(ossl_error());
                 }
                 off += bytes_written;
-                /// Regardless of error, continue to send fragments
-                return pull_encrypted_and_send().then([]{
-                    return make_ready_future<stop_iteration>(stop_iteration::no);
-                });
+                return make_ready_future<stop_iteration>(stop_iteration::no);
             });
         });
     }
@@ -598,17 +764,6 @@ public:
             return handshake().then([this, p = std::move(p)]() mutable {
                return put(std::move(p));
             });
-        }
-
-        // We want to make sure that we write to the underlying bio with as large
-        // packets as possible. This is because eventually this translates to a
-        // sendmsg syscall. Further it results in larger TLS records which makes
-        // encryption/decryption faster. Hence to avoid cases where we would do
-        // an extra syscall for something like a 100 bytes header we linearize the
-        // packet if it's below the max TLS record size.
-        // TODO(Rob): Avoid magic numbers
-        if (p.nr_frags() > 1 && p.len() <= 16000) {
-            p.linearize();
         }
 
         auto i = p.fragments().begin();
@@ -637,12 +792,15 @@ public:
                         break;
                     case SSL_ERROR_WANT_READ:
                         netlogger.info("SSL_accept: ERR_WANT_READ");
-                        return pull_encrypted_and_send();
+                        return pull_encrypted_and_send().then([this]{
+                            _in_bio.bio_clear();
+                        });
+                        break;
                     case SSL_ERROR_WANT_WRITE:
                         netlogger.info("SSL_accept: ERR_WANT_WRITE");
                         break;
                     default:
-                        netlogger.info("Failed to complete SSL handlshake");
+                        netlogger.info("Failed to complete SSL handlshake: {}", ssl_err);
                         return make_exception_future<>(ossl_error());
                     }
                     return make_ready_future<>();
@@ -653,12 +811,13 @@ public:
     }
 
     future<> wait_for_input() {
-        if (eof()) {
-            return make_ready_future<>();
-        }
+        // if (eof()) {
+        //     return make_ready_future<>();
+        // }
         netlogger.info("Inside session::wait_for_input");
         return _in.get().then([this](buf_type data) {
             if (data.empty()) {
+                netlogger.info("BUF EMPTY");
                 _eof = true;
                 return make_ready_future<>();
             }
@@ -666,21 +825,12 @@ public:
             // by the SSL struct.  Think of this of writing encrypted data into
             // the SSL session
             netlogger.info("Read {} bytes over the wire", data.size());
-            const auto input_len = data.size();
-            auto buf = make_lw_shared<buf_type>(std::move(data));
-            return do_until(
-              [buf]{ return buf->empty(); },
-              [this, buf]{
-                  const auto n = BIO_write(_in_bio, buf->get(), buf->size());
-                  netlogger.info("Wrote {} bytes over to SSL in bio", n);
-                  if (n <= 0) {
-                      return make_exception_future<>(ossl_error(n,  "Error while waiting for input"));
-                  }
-                  buf->trim_front(n);
-                  return make_ready_future();
-              }).finally([buf, input_len]{
-                  netlogger.info("Wrote {} bytes into internal SSL buffers", input_len);
-              });
+            const auto n = BIO_write(_in_bio.bio(), data.get(), data.size());
+            netlogger.info("Wrote {} bytes over to SSL in bio", n);
+            if (n <= 0) {
+                return make_exception_future<>(ossl_error(n,  "Error while waiting for input"));
+            }
+            return make_ready_future();
         }).handle_exception([](auto ep){
             return make_exception_future(ep);
         });
@@ -691,26 +841,28 @@ public:
         // Check if there is encrypted data sitting in ssls internal buffers, otherwise wait
         // for data and use a
         auto f = make_ready_future<>();
-        auto avail = BIO_ctrl_pending(_in_bio);
+        auto avail = BIO_ctrl_pending(_in_bio.bio());
         if (avail == 0) {
             if (eof()) {
                 return make_ready_future<buf_type>(buf_type());
             }
             f = wait_for_input();
         }
-        return f.then([this]() {
-            const auto buf_size = 4096;
-            buf_type buf(buf_size);
+        return f.then([this, avail]() {
+            buf_type buf(avail);
             // Read decrypted data from ssls internal buffers
-            auto bytes_read = SSL_read(_ssl.get(), buf.get_write(), buf_size);
+            auto bytes_read = SSL_read(_ssl.get(), buf.get_write(), avail);
             if (bytes_read <= 0) {
                 const auto ec = SSL_get_error(_ssl.get(), bytes_read);
-                if (ec == SSL_ERROR_ZERO_RETURN && connected()) {
+                if (ec == SSL_ERROR_ZERO_RETURN) {
                     // Client has initiated shutdown by sending EOF
-                    netlogger.info("Inside detection os SSL_ERROR_ZERO_RETURN");
+                    netlogger.info("Detected SSL_ERROR_ZERO_RETURN");
                     _eof = true;
                     close();
                     return make_ready_future<buf_type>(buf_type());
+                } else if (ec == SSL_ERROR_WANT_READ) {
+                    netlogger.info("Detected SSL_ERROR_WANT_READ");
+                    return pull_encrypted_and_send().then(std::bind(&session::do_get, this));
                 }
                 return make_exception_future<buf_type>(ossl_error(ec, "error via SSL_read"));
             }
@@ -1018,8 +1170,8 @@ private:
     bool _shutdown = false;
     buf_type _input;
     gate _read_gate;
-    BIO* _in_bio;
-    BIO* _out_bio;
+    scattered_bio _in_bio;
+    scattered_bio _out_bio;
     ssl_ctx_ptr _ctx;
     ssl_ptr _ssl;
 };
