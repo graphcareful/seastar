@@ -791,7 +791,6 @@ public:
                 if (ec == SSL_ERROR_ZERO_RETURN) {
                     // Client has initiated shutdown by sending EOF
                     _eof = true;
-                    close();
                     return make_ready_future<buf_type>(buf_type());
                 } else if (ec == SSL_ERROR_WANT_READ) {
                     // Not enough data resides in the internal SSL buffers to merit a read, i.e.
