@@ -49,9 +49,12 @@ module seastar;
 #include <seastar/core/with_timeout.hh>
 #include <seastar/util/later.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/log.hh>
 #endif
 
 namespace seastar {
+
+logger netlogger ("ss::net");
 
 class ossl_error_category : public std::error_category {
 public:
@@ -593,6 +596,7 @@ public:
     // This method pulls encrypted data from the SSL context and writes
     // it to the underlying socket.
     future<> pull_encrypted_and_send(){
+        netlogger.info("pull_encrypted_and_send: {}", (int)_type);
         auto msg = make_lw_shared<scattered_message<char>>();
         return do_until(
             [this] { return BIO_ctrl_pending(_out_bio) == 0; },
@@ -600,6 +604,7 @@ public:
                 // TODO(rob) avoid magic numbers
                 buf_type buf(4096);
                 auto n = BIO_read(_out_bio, buf.get_write(), buf.size());
+                netlogger.info("pull_encrypted_and_send, bio_read (out_bio) {} bytes: {}", n, (int)_type);
                 if (n > 0){
                     buf.trim(n);
                     msg->append(std::move(buf));
@@ -620,6 +625,7 @@ public:
     // This data is later able to be retrieved in its encrypted form by reading
     // from the associated _out_bio
     future<> do_put(frag_iter i, frag_iter e) {
+        netlogger.info("do_put: {}", (int)_type);
         return do_for_each(i, e, [this](net::fragment& f){
             auto ptr = f.base;
             auto size = f.size;
@@ -631,6 +637,7 @@ public:
                     return make_ready_future<stop_iteration>(stop_iteration::yes);
                 }
                 auto bytes_written = SSL_write(_ssl.get(), ptr + off, size - off);
+                netlogger.info("do_put, SSL_write {} bytes: {}", bytes_written, (int)_type);
                 if(bytes_written <= 0){
                     const auto ec = SSL_get_error(_ssl.get(), bytes_written);
                     if (ec == SSL_ERROR_WANT_WRITE) {
@@ -655,6 +662,7 @@ public:
     }
 
     future<> put(net::packet p) override {
+        netlogger.info("put: {}", (int)_type);
         if (_error) {
             return make_exception_future<>(_error);
         }
@@ -719,6 +727,7 @@ public:
     // Call this method when its desired to have a read performed, but if a read is already being
     // performed, just return when that read completes
     future<> maybe_wait_for_data() {
+        netlogger.info("maybe_wait_for_data: {}", (int)_type);
         auto units = try_get_units(_in_sem, 1);
         if (units) {
             return wait_for_input().finally([units = std::move(units)]{});
@@ -732,6 +741,7 @@ public:
     // Call this method when its desired to write out data, but if a write is already being performed,
     // just return when that write completes
     future<> maybe_send_data() {
+        netlogger.info("maybe_send_data: {}", (int)_type);
         auto units = try_get_units(_out_sem, 1);
         if (units) {
             return pull_encrypted_and_send().finally([units = std::move(units)]{});
@@ -743,11 +753,13 @@ public:
     }
 
     future<> wait_for_input() {
+        netlogger.info("wait_for_input: {}", (int)_type);
         if (eof()) {
             return make_ready_future<>();
         }
         return _in.get().then([this](buf_type data) {
             if (data.empty()) {
+                netlogger.info("wait_for_input EOF detected: {}", (int)_type);
                 _eof = true;
                 return make_ready_future<>();
             }
@@ -759,6 +771,7 @@ public:
               [buf]{ return buf->empty(); },
               [this, buf]{
                   const auto n = BIO_write(_in_bio, buf->get(), buf->size());
+                  netlogger.info("wait_for_input bio write(in_bio) {} bytes: {}", n, (int)_type);
                   if (n <= 0) {
                       _error = std::make_exception_ptr(ossl_error("Error while waiting for input"));
                       return make_exception_future<>(_error);
@@ -770,6 +783,7 @@ public:
     }
 
     future<buf_type> do_get() {
+        netlogger.info("do_get: {}", (int)_type);
         // Check if there is encrypted data sitting in ssls internal buffers, otherwise wait
         // for data and read then return the decrypted data from the ssl session
         auto f = make_ready_future<>();
@@ -779,16 +793,19 @@ public:
         }
         return f.then([this]() {
             if (eof() && SSL_pending(_ssl.get()) == 0) {
+                netlogger.info("do_get: exiting early {}", (int)_type);
                 return make_ready_future<buf_type>(buf_type());
             }
             const auto buf_size = 4096;
             buf_type buf(buf_size);
             // Read decrypted data from ssls internal buffers
             auto bytes_read = SSL_read(_ssl.get(), buf.get_write(), buf_size);
+            netlogger.info("do_get SSL_read {} bytes: {}", bytes_read, (int)_type);
             if (bytes_read <= 0) {
                 const auto ec = SSL_get_error(_ssl.get(), bytes_read);
                 if (ec == SSL_ERROR_ZERO_RETURN) {
                     // Client has initiated shutdown by sending EOF
+                    netlogger.info("do_get EOF detected: {}", (int)_type);
                     _eof = true;
                     return make_ready_future<buf_type>(buf_type());
                 } else if (ec == SSL_ERROR_WANT_READ) {
@@ -809,6 +826,7 @@ public:
     }
 
     future<buf_type> get() override {
+        netlogger.info("get: {}", (int)_type);
         if (_error) {
             return make_exception_future<temporary_buffer<char>>(_error);
         }
@@ -825,16 +843,20 @@ public:
     }
 
     future<> do_shutdown() {
+        netlogger.info("do_shutdown: {}", (int)_type);
         if(_error || !connected() || eof()) {
+            netlogger.info("do_shutdown exiting: {}", (int)_type);
             return make_ready_future();
         }
         auto res = SSL_shutdown(_ssl.get());
         if (res == 1){
             // Shutdown has completed successfully
+            netlogger.info("do_shutdown SSL_shutdown graceful: {}", (int)_type);
             return make_ready_future<>();
         } else if (res == 0) {
             // Shutdown process is ongoing and has not yet completed, peer has not yet replied
             // 0 does not indicate error, calling SSL_get_error is undefined
+            netlogger.info("do_shutdown SSL_shutdown 0: {}", (int)_type);
             return yield().then([this]{
                 return do_shutdown();
             });
@@ -842,6 +864,7 @@ public:
         // Shutdown was not successful, calling SSL_get_error will indicate why
         auto err = SSL_get_error(_ssl.get(), res);
         if (err == SSL_ERROR_WANT_READ) {
+            netlogger.info("do_shutdown WANT_READ: {}", (int)_type);
             auto f = make_ready_future();
             if (_type == session_type::CLIENT) {
                 // Clients will be sending the close_notify message, and expecting SSL_ERROR_ZERO_RETURN
@@ -849,7 +872,9 @@ public:
                 f = pull_encrypted_and_send();
             }
             return f.then([this]{
+                netlogger.info("do_shutdown waiting_for_eof: {}", (int)_type);
                 return wait_for_eof().then([this] {
+                    netlogger.info("do_shutdown shutting_down again: {}", (int)_type);
                     return do_shutdown();
                 });
             });
@@ -912,9 +937,12 @@ public:
             return make_ready_future();
         }
         return repeat([this] {
+            netlogger.info("waiting for EOF: {}", (int)_type);
             if (eof()) {
+                netlogger.info("EOF FOUND: {}", (int)_type);
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
+            netlogger.info("EOF NOT FOUND: {}", (int)_type);
             return with_semaphore(_in_sem, 1, [this] {
                 return do_get().then([](auto){
                     return stop_iteration::no;
@@ -938,6 +966,7 @@ public:
                 if (connected()) {
                     return make_ready_future<>();
                 }
+                netlogger.info("Attempting handshake: {} - {}", (int)_type, (void*)this);
                 auto fn = (_type == session_type::SERVER) ?
                         std::bind(&session::server_handshake, this) :
                         std::bind(&session::client_handshake, this);
@@ -945,6 +974,11 @@ public:
                     [this]{ return connected(); },
                     [fn = std::move(fn)]{ return fn(); }
                 ).then([this]{
+                    if (connected()) {
+                        netlogger.info("Handshake completed with success: {} - {}", (int)_type, (void*)this);
+                    } else {
+                        netlogger.info("Handshake completed WITHOUT success: {} - {}", (int)_type, (void*)this);
+                    }
                     if (_type == session_type::CLIENT || _creds->get_client_auth() != client_auth::NONE) {
                         verify();
                     }
@@ -1216,10 +1250,14 @@ private:
     }
 
     future<> client_handshake() {
+        netlogger.info("Client handshake calling do_handshake: {}", (int)_type);
         return do_handshake(SSL_connect, [this]{
+            netlogger.info("Client handshake calling do send encry: {}", (int)_type);
             return pull_encrypted_and_send().then([this]{
+                netlogger.info("Client handshake waiting for input: {}", (int)_type);
                 return wait_for_input().then([this]{
                     if (eof()) {
+                        netlogger.info("Client handshake EOF detected: {}", (int)_type);
                         return make_exception_future<>(std::runtime_error("EOF observed during handshake"));
                     }
                     return make_ready_future<>();
@@ -1229,10 +1267,13 @@ private:
     }
 
     future<> server_handshake() {
+        netlogger.info("Server handshake waiting for input: {}", (int)_type);
         return wait_for_input().then([this]{
             if (eof()) {
+                netlogger.info("Server handshake EOF Found: {}", (int)_type);
                 return make_exception_future<>(std::runtime_error("EOF observed during handshake"));
             }
+            netlogger.info("Server handshake doing handshake: {}", (int)_type);
             return do_handshake(SSL_accept, std::bind(&session::pull_encrypted_and_send, this));
         });
     }
