@@ -1129,7 +1129,7 @@ private:
             case GEN_DIRNAME:
             {
                 san.type = subject_alt_name_type::dn;
-                auto dirname = get_ossl_string(name->d.directoryName);
+                auto dirname = get_dn_string(name->d.directoryName);
                 if (!dirname) {
                     throw std::runtime_error("Expected non null value for SAN dirname");
                 }
@@ -1151,8 +1151,8 @@ private:
         if (!peer_cert) {
             return std::nullopt;
         }
-        auto subject = get_ossl_string(X509_get_subject_name(peer_cert.get()));
-        auto issuer = get_ossl_string(X509_get_issuer_name(peer_cert.get()));
+        auto subject = get_dn_string(X509_get_subject_name(peer_cert.get()));
+        auto issuer = get_dn_string(X509_get_issuer_name(peer_cert.get()));
         if(!subject || !issuer) {
             throw ossl_error("error while extracting certificate DN strings");
         }
@@ -1202,15 +1202,17 @@ private:
         return ssl_ctx;
     }
 
-    static std::optional<sstring> get_ossl_string(X509_NAME* name){
-        if (auto name_str = X509_NAME_oneline(name, nullptr, 0)) {
-            // sstring constructor may throw, to ensure deallocation of this OpenSSL string in
-            // all cases, wrap the call to free() in a deferred_action
-            auto done = defer([&name_str]() noexcept { OPENSSL_free(name_str); });
-            sstring ossl_str(name_str);
-            return ossl_str;
+    static std::optional<sstring> get_dn_string(X509_NAME* name) {
+        auto out = bio_ptr(BIO_new(BIO_s_mem()));
+        if (!X509_NAME_print_ex(out.get(), name, 0, ASN1_STRFLGS_RFC2253 | XN_FLAG_SEP_COMMA_PLUS |
+                                XN_FLAG_FN_SN | XN_FLAG_DUMP_UNKNOWN_FIELDS)) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        static const auto max_len = 4096;
+        char buffer[max_len];
+        memset(buffer, 0, max_len);
+        BIO_read(out.get(), buffer, max_len - 1);
+        return sstring(buffer);
     }
 
     future<> client_handshake() {
