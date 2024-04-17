@@ -618,6 +618,9 @@ public:
                 return _out.put(std::move(*msg).release());
             }
             return make_ready_future<>();
+        }).handle_exception([this](auto ep){
+            netlogger.info("Pull encrypted and send exception: {} - {} - {}", (void*)this, (int)_type, ep);
+            return make_exception_future<>(ep);
         });
     }
 
