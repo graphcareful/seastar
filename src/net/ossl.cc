@@ -904,6 +904,15 @@ public:
             if (!SSL_CTX_set_default_verify_paths(_ctx.get())) {
                 throw ossl_error("Couldn't load system trust");
             }
+            if (!SSL_CTX_set_default_verify_file(_ctx.get())) {
+                throw ossl_error("Couldn't load system trust 1");
+            }
+            if (!SSL_CTX_set_default_verify_dir(_ctx.get())) {
+                throw ossl_error("Couldn't load system trust 2");
+            }
+            if (!SSL_CTX_set_default_verify_store(_ctx.get())) {
+                throw ossl_error("Couldn't load system trust 3");
+            }
             _creds->set_load_system_trust(false);
         }
 
