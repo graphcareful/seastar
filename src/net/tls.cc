@@ -778,6 +778,7 @@ public:
         auto res = gnutls_certificate_verify_peers3(*this, _type != type::CLIENT || _options.server_name.empty()
                         ? nullptr : _options.server_name.c_str(), &status);
         if (res == GNUTLS_E_NO_CERTIFICATE_FOUND && _type != type::CLIENT && _creds->get_client_auth() != client_auth::REQUIRE) {
+            netlogger.warn("WWW NO CERT FOUND");
             return;
         }
         if (res < 0) {
