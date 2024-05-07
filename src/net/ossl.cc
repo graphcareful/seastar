@@ -901,6 +901,7 @@ public:
 
     future<> handshake() {
         if (_creds->need_load_system_trust()) {
+            netlogger.info("WWW SYSTEM TRUST LOADED");
             if (!SSL_CTX_set_default_verify_paths(_ctx.get())) {
                 throw ossl_error("Couldn't load system trust");
             }
