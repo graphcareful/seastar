@@ -60,11 +60,14 @@ module seastar;
 #include <seastar/net/tls.hh>
 #include <seastar/net/stack.hh>
 #include <seastar/util/std-compat.hh>
+#include <seastar/util/log.hh>
 #include <seastar/util/variant_utils.hh>
 #include <seastar/core/fsnotify.hh>
 #endif
 
 namespace seastar {
+
+logger netlogger("nettt");
 
 class blob_wrapper: public gnutls_datum_t {
 public:
@@ -780,6 +783,7 @@ public:
         if (res < 0) {
             throw std::system_error(res, error_category());
         }
+        netlogger.warn("WWW STATUS: {}", status);
         if (status & GNUTLS_CERT_INVALID) {
             auto stat_str = cert_status_to_string(gnutls_certificate_type_get(*this), status);
             auto dn = extract_dn_information();
