@@ -917,7 +917,7 @@ public:
             if (!SSL_CTX_set_default_verify_store(_ctx.get())) {
                 throw ossl_error("Couldn't load system trust 3");
             }
-            if (!SSL_CTX_load_verify_dir(_ctx.get(), "/etc/ssl/certs/") {
+            if (!SSL_CTX_load_verify_dir(_ctx.get(), "/etc/ssl/certs/")) {
                 throw ossl_error("Couldn't load system trust 1");
             }
             _creds->set_load_system_trust(false);
