@@ -579,9 +579,6 @@ public:
         if (t == session_type::SERVER) {
             SSL_set_accept_state(_ssl.get());
         } else {
-            if (!_options.server_name.empty()){
-                SSL_set_tlsext_host_name(_ssl.get(), _options.server_name.c_str());
-            }
             SSL_set_connect_state(_ssl.get());
         }
         // SSL_set_bio transfers ownership of the read and write bios to the SSL instance
@@ -921,6 +918,9 @@ public:
                 throw ossl_error("Couldn't load system trust 1");
             }
             _creds->set_load_system_trust(false);
+        }
+        if (_type == session_type::CLIENT && !_options.server_name.empty()) {
+            SSL_set_tlsext_host_name(_ssl.get(), _options.server_name.c_str());
         }
 
         // acquire both semaphores to sync both read & write
