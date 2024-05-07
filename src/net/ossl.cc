@@ -49,9 +49,12 @@ module seastar;
 #include <seastar/core/with_timeout.hh>
 #include <seastar/util/later.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/log.hh>
 #endif
 
 namespace seastar {
+
+logger netlogger2("neeet");
 
 class ossl_error_category : public std::error_category {
 public:
@@ -901,7 +904,7 @@ public:
 
     future<> handshake() {
         if (_creds->need_load_system_trust()) {
-            netlogger.info("WWW SYSTEM TRUST LOADED");
+            netlogger2.info("WWW SYSTEM TRUST LOADED");
             if (!SSL_CTX_set_default_verify_paths(_ctx.get())) {
                 throw ossl_error("Couldn't load system trust");
             }
